@@ -1,0 +1,61 @@
+name: Deploy Eldoria frontend
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - frontend/**
+      - .github/workflows/deploy-frontend.yml
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: eldoria-pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    # Enable only after verifying the backend's private Access policy and custom domain.
+    if: vars.ELDORIA_PRIVATE_BACKEND_READY == 'true' && vars.ELDORIA_FRONTEND_DOMAIN != ''
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    defaults:
+      run:
+        working-directory: frontend
+    env:
+      VITE_BACKEND_ORIGIN: ${{ vars.ELDORIA_BACKEND_ORIGIN || 'https://eldoria-api.pre-scribe.org' }}
+      ELDORIA_FRONTEND_DOMAIN: ${{ vars.ELDORIA_FRONTEND_DOMAIN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Read Pages configuration
+        id: pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6
+      - name: Configure Pages base path
+        env:
+          PAGES_BASE_PATH: ${{ steps.pages.outputs.base_path }}
+        run: |
+          node --input-type=module -e 'import fs from "node:fs"; const path = (process.env.PAGES_BASE_PATH || "").split("/").filter(Boolean).join("/"); fs.appendFileSync(process.env.GITHUB_ENV, `ELDORIA_PUBLIC_BASE=${path ? `/${path}/` : "/"}\n`);'
+      - run: npm ci
+      - run: npm run test:connection
+      - run: npm run build:hosted
+      - name: Add the custom domain
+        run: |
+          node --input-type=module -e 'import fs from "node:fs"; const host = process.env.ELDORIA_FRONTEND_DOMAIN; if (!/^[a-z0-9.-]+$/i.test(host)) throw Error("Invalid frontend hostname"); fs.writeFileSync("dist-hosted/CNAME", host + "\n");'
+      - name: Upload only the built frontend
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
+        with:
+          path: frontend/dist-hosted
+      - name: Publish the frontend
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5

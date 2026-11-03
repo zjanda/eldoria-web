@@ -1,0 +1,109 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* The page itself never scrolls: it is a fixed app frame sized to the visible
+     viewport (dvh tracks mobile browser bars). Only inner panels scroll. */
+  html,
+  body {
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+  body {
+    position: fixed;
+    inset: 0;
+  }
+  #root {
+    height: 100%;
+    height: 100dvh;
+    overflow: hidden;
+  }
+  /* Inner scroll areas keep their scroll to themselves (no chaining to the page). */
+  .overflow-y-auto {
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
+  }
+  body {
+    @apply bg-ink text-parchment font-sans antialiased;
+    background-image: radial-gradient(ellipse at top, #121624 0%, #06070b 70%);
+  }
+  ::selection {
+    background: rgba(201, 161, 74, 0.35);
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #2a2f42 transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: #2a2f42;
+    border-radius: 8px;
+  }
+  button:focus-visible,
+  textarea:focus-visible,
+  input:focus-visible {
+    outline: 2px solid #c9a14a;
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  .panel {
+    @apply relative rounded-xl border border-gold/15 bg-night-900/80 shadow-panel backdrop-blur-md;
+  }
+  .panel::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    background: linear-gradient(180deg, rgba(227, 199, 125, 0.06), transparent 30%);
+  }
+  .gold-rule {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(201, 161, 74, 0.55), transparent);
+  }
+  .label {
+    @apply font-display text-[0.68rem] uppercase tracking-[0.22em] text-gold/80;
+  }
+  .btn-gold {
+    @apply relative inline-flex items-center justify-center gap-2 rounded-md border border-gold/60 bg-gradient-to-b from-gold/25 to-gold/5 px-6 py-3 font-display text-sm uppercase tracking-[0.2em] text-gold-soft transition hover:border-gold hover:from-gold/35 hover:text-parchment hover:shadow-glow disabled:cursor-not-allowed disabled:opacity-40;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-md border border-white/10 bg-white/[0.03] px-4 py-2 text-sm text-mist transition hover:border-gold/40 hover:text-parchment disabled:opacity-40;
+  }
+  .chip {
+    @apply rounded-full border border-gold/25 bg-night-800/80 px-3.5 py-1.5 text-left text-[0.82rem] leading-snug text-parchment/90 transition hover:border-gold/70 hover:bg-night-700 hover:text-parchment disabled:cursor-not-allowed disabled:opacity-40;
+  }
+  .narration-text {
+    @apply font-serif leading-[1.6] text-parchment/95;
+    font-size: 1.04em;
+  }
+}
+
+.text-shadow {
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.85);
+}
+
+.reduce-motion *,
+.reduce-motion *::before,
+.reduce-motion *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
