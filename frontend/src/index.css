@@ -80,6 +80,12 @@
   .chip {
     @apply rounded-full border border-gold/25 bg-night-800/80 px-3.5 py-1.5 text-left text-[0.82rem] leading-snug text-parchment/90 transition hover:border-gold/70 hover:bg-night-700 hover:text-parchment disabled:cursor-not-allowed disabled:opacity-40;
   }
+  .input {
+    @apply w-full rounded-md border border-gold/20 bg-night-900/90 px-3 py-2 text-sm text-parchment placeholder:text-mist/50 focus:border-gold/60 focus:outline-none;
+  }
+  .stepper {
+    @apply flex h-8 w-8 shrink-0 items-center justify-center rounded border border-gold/30 text-lg leading-none text-gold-soft transition hover:border-gold hover:text-parchment disabled:cursor-not-allowed disabled:opacity-30;
+  }
   .narration-text {
     @apply font-serif leading-[1.6] text-parchment/95;
     font-size: 1.04em;

@@ -1,6 +1,14 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { useState } from "react";
-import type { SuggestedAction, TechniqueOffer } from "../../api/types";
+import { useEffect, useState } from "react";
+import { actionDraftKey, clearDraft, readDraft, writeDraft } from "../../lib/drafts";
+import type { Fate, SuggestedAction, TechniqueOffer } from "../../api/types";
+
+const FATES: { id: Fate | null; label: string; title: string }[] = [
+  { id: null, label: "Succeed", title: "Your heroes' attempts work" },
+  { id: "critical_success", label: "Triumph", title: "A critical success" },
+  { id: "failure", label: "Fail", title: "Your heroes' attempts do not work" },
+  { id: "critical_failure", label: "Disaster", title: "A critical failure" },
+];
 
 interface ActionComposerProps {
   storyControl: number;
@@ -11,20 +19,38 @@ interface ActionComposerProps {
   disabled: boolean;
   busy: boolean;
   inCombat: boolean;
-  onSubmit: (text: string) => Promise<boolean>;
+  /** The heroes' names, for the hint in the empty box. */
+  heroNames: string[];
+  /** The tale being played: the action being typed is kept per tale. */
+  adventureId: string;
+  /** Dice are off: the player chooses how each action turns out. */
+  chooseFate: boolean;
+  onSubmit: (text: string, fate: Fate | null) => Promise<boolean>;
 }
 
 const MAX_LENGTH = 600;
 
-export function ActionComposer({ storyControl, onDm, suggestions, offers, onLearn, disabled, busy, inCombat, onSubmit }: ActionComposerProps) {
-  const [text, setText] = useState("");
+export function ActionComposer({ storyControl, onDm, suggestions, offers, onLearn, disabled, busy, inCombat, heroNames, adventureId, chooseFate, onSubmit }: ActionComposerProps) {
+  const draftKey = actionDraftKey(adventureId);
+  // What is being typed is kept as it is typed, so a reloaded page does not lose it.
+  const [text, setText] = useState(() => readDraft<string>(draftKey) ?? "");
+  useEffect(() => {
+    if (text) writeDraft(draftKey, text);
+    else clearDraft(draftKey);
+  }, [draftKey, text]);
+  const [fate, setFate] = useState<Fate | null>(null);
+  const [first = "one hero", second = "the other"] = heroNames;
+  const everyone = heroNames.length > 1 ? `${heroNames.slice(0, -1).join(", ")} and ${heroNames[heroNames.length - 1]}` : first;
   const [dm, setDm] = useState(false);
   const dmActive = dm && storyControl < 5;
 
   const submit = async (value: string) => {
     if (!value.trim() || disabled) return;
-    const ok = await (dmActive ? onDm(value) : onSubmit(value));
-    if (ok) setText("");
+    const ok = await (dmActive ? onDm(value) : onSubmit(value, chooseFate ? fate : null));
+    if (ok) {
+      setText("");
+      setFate(null);
+    }
   };
 
   return (
@@ -93,6 +119,17 @@ export function ActionComposer({ storyControl, onDm, suggestions, offers, onLear
           )}
         </AnimatePresence>
 
+        {chooseFate && !dmActive && (
+          <div className="mt-2.5 flex flex-wrap items-center gap-1.5" role="radiogroup" aria-label="Fate of this action">
+            <span className="text-[0.68rem] uppercase tracking-[0.18em] text-mist">No dice. This action will</span>
+            {FATES.map((option) => (
+              <button key={option.label} type="button" role="radio" aria-checked={fate === option.id} title={option.title} disabled={disabled}
+                className={`chip !px-2.5 !py-1 !text-[0.74rem] ${fate === option.id ? "!border-gold/80 !bg-gold/15 !text-parchment" : ""}`} onClick={() => setFate(option.id)}>
+                {option.label}
+              </button>
+            ))}
+          </div>
+        )}
         <form
           className="mt-2.5 flex items-end gap-2"
           onSubmit={(event) => {
@@ -118,8 +155,8 @@ export function ActionComposer({ storyControl, onDm, suggestions, offers, onLear
             }}
             placeholder={
               dmActive ? "Describe the world or give explicit DM instructions…" : inCombat
-                ? "Give each hero an action — e.g. “Edgar binds the stag with Umbra while Elara lashes it with thorns”"
-                : "What do Edgar and Elara do? Anything you can imagine…"
+                ? `Give each hero an action — e.g. “${first} strikes the nearest foe while ${second} tends the wounded”`
+                : `What ${heroNames.length === 1 ? "does" : "do"} ${everyone} do? Anything you can imagine…`
             }
             className="min-h-[3rem] flex-1 resize-none rounded-lg border border-gold/20 bg-night-900/90 px-3.5 py-2.5 font-serif text-[1.05rem] text-parchment placeholder:font-sans placeholder:text-sm placeholder:text-mist/50 focus:border-gold/60 focus:outline-none disabled:opacity-50"
           />

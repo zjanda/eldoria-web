@@ -1,10 +1,13 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useState } from "react";
-import type { Ability, Character, SceneState } from "../../api/types";
+import type { Ability, Character, EquipmentSlot, HeroSheet, SceneState } from "../../api/types";
 import { useOpenArt } from "../common/ArtStudio";
 import { HealthBar } from "../common/HealthBar";
 import { Portrait } from "../common/Portrait";
+import { readDraft, sheetDraftKey } from "../../lib/drafts";
+import { SheetEditor } from "./SheetEditor";
 
+const SLOT_ICON: Record<EquipmentSlot, string> = { weapon: "⚔", armor: "⛨", accessory: "◈" };
 const ATTRIBUTE_LABELS: Record<string, string> = { might: "MIG", agility: "AGI", wits: "WIT", spirit: "SPI", presence: "PRE" };
 const KIND_ICON: Record<Ability["kind"], string> = {
   attack: "⚔",
@@ -23,15 +26,27 @@ function modifier(score: number) {
 }
 
 function unavailableReason(ability: Ability, hero: Character, scene: SceneState, inCombat: boolean): string | null {
-  if (ability.blocked_by_radiance && scene.lighting === "radiant") return "Umbra cannot act in radiant light";
+  if (ability.blocked_by_radiance && scene.lighting === "radiant") return `${hero.resource_name} fails in radiant light`;
   if (ability.cost > hero.resource_current) return `Needs ${ability.cost} ${hero.resource_name}`;
   if (ability.usable_in === "combat" && !inCombat) return "Combat only";
   if (ability.usable_in === "exploration" && inCombat) return "Not in combat";
   return null;
 }
 
-export function CharacterCard({ hero, scene, inCombat }: { hero: Character; scene: SceneState; inCombat: boolean }) {
+interface CharacterCardProps {
+  hero: Character;
+  /** The tale this hero is in. */
+  adventureId: string;
+  scene: SceneState;
+  inCombat: boolean;
+  /** Rewrites this hero's sheet; resolves true when the server accepted it. */
+  onEditSheet: (heroId: string, sheet: HeroSheet) => Promise<boolean>;
+}
+
+export function CharacterCard({ hero, adventureId, scene, inCombat, onEditSheet }: CharacterCardProps) {
   const [expanded, setExpanded] = useState(false);
+  // Unsaved edits from before a reload: reopen the editor on them rather than leave them out of sight.
+  const [editing, setEditing] = useState(() => readDraft(sheetDraftKey(adventureId, hero.id)) !== null);
   const openArt = useOpenArt();
   const down = hero.hp <= 0;
   return (
@@ -109,13 +124,35 @@ export function CharacterCard({ hero, scene, inCombat }: { hero: Character; scen
                       {ability.cost > 0 && <span className="text-[0.62rem] text-mist">{ability.cost} {hero.resource_name}</span>}
                     </div>
                     <p className="mt-0.5 text-[0.66rem] leading-snug text-mist">{reason ?? ability.description}</p>
+                    {!reason && ability.summary && (
+                      <p className="mt-0.5 text-[0.62rem] leading-snug text-gold-soft/80">{ability.summary}{ability.house_ruled ? " · house-ruled" : ""}</p>
+                    )}
                   </li>
                 );
               })}
             </ul>
-            <p className="mt-2 text-[0.62rem] text-mist/80">Skilled in: {hero.proficient_skills.map((s) => s.replace(/_/g, " ")).join(", ")}</p>
+            {(hero.equipment ?? []).length > 0 && (
+              <ul className="mt-2 space-y-1">
+                {hero.equipment.map((item) => (
+                  <li key={item.id} className="text-[0.7rem] leading-snug text-parchment/85" title={[item.description, item.how_used, item.qualities.join(", ")].filter(Boolean).join(" · ")}>
+                    <span className="mr-1.5 text-gold/80">{SLOT_ICON[item.slot]}</span>
+                    {item.name}
+                    <span className="text-mist">
+                      {item.slot === "weapon" && ` · ${item.damage_dice ?? ""} ${item.damage_type}`.trimEnd()}
+                      {item.slot === "armor" && ` · +${item.armor_bonus} AC`}
+                      {item.slot === "accessory" && item.advantage_on_skills.length > 0 && ` · aids ${item.advantage_on_skills.map((s) => s.replace(/_/g, " ")).join(", ")}`}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <p className="mt-2 text-[0.62rem] text-mist/80">Skilled in: {hero.proficient_skills.map((s) => s.replace(/_/g, " ")).join(", ") || "nothing yet"}</p>
+            <button className="btn-ghost mt-2 w-full !py-1.5 text-xs" onClick={() => setEditing(true)}>✎ Edit sheet</button>
           </motion.div>
         )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {editing && <SheetEditor hero={hero} adventureId={adventureId} onSave={onEditSheet} onClose={() => setEditing(false)} />}
       </AnimatePresence>
     </div>
   );

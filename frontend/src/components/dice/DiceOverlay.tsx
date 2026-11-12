@@ -17,7 +17,8 @@ const OUTCOME_STYLE: Record<string, { label: string; color: string }> = {
 /** Rolls worth a cinematic moment: party checks and attacks against a DC or AC. */
 export function featuredRolls(rolls: DiceRoll[], partyNames: string[]): DiceRoll[] {
   return rolls
-    .filter((r) => (r.target_label === "DC" || r.target_label === "AC") && partyNames.includes(r.actor_name))
+    // With dice off nothing was rolled, so there is nothing to watch tumble.
+    .filter((r) => !r.fated && (r.target_label === "DC" || r.target_label === "AC") && partyNames.includes(r.actor_name))
     .slice(0, MAX_FEATURED_ROLLS);
 }
 

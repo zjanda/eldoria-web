@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import type { Adventure } from "../api/types";
+import type { Adventure, Fate, GameRules, HeroSheet } from "../api/types";
 import type { TurnFeedback } from "../hooks/useAdventure";
 import type { Settings, TextSize } from "../hooks/useSettings";
 import type { VoiceOptions } from "../hooks/useVoices";
@@ -14,6 +14,7 @@ import { DiceOverlay, featuredRolls } from "./dice/DiceOverlay";
 import { ChronicleViewer } from "./narrative/ChronicleViewer";
 import { NarrativeLog } from "./narrative/NarrativeLog";
 import { CharacterCard } from "./panels/CharacterCard";
+import { DEFAULT_RULES, DIFFICULTIES, RetellDialog, RulesPanel } from "./rules/RulesPanel";
 import { SidePanels } from "./panels/SidePanels";
 import { SceneView } from "./scene/SceneView";
 import { SettingsMenu } from "./settings/SettingsMenu";
@@ -32,9 +33,12 @@ interface GameScreenProps {
   voices: VoiceOptions;
   onSettingsChange: (patch: Partial<Settings>) => void;
   onResetSettings: () => void;
-  onSubmit: (text: string) => Promise<boolean>;
-  onStoryAction: (action: "draft" | "begin" | "discard" | "control" | "dm" | "undo", value?: string | number) => Promise<boolean>;
+  onSubmit: (text: string, fate?: Fate | null) => Promise<boolean>;
+  onRetell: (snapshotId: number, direction: string, remember: boolean) => Promise<boolean>;
+  onSetRules: (rules: GameRules, wishes: string[]) => Promise<boolean>;
+  onStoryAction: (action: "draft" | "begin" | "discard" | "control" | "narration" | "dm" | "undo", value?: string | number | boolean) => Promise<boolean>;
   onLearnTechnique: (offerId: string) => void;
+  onEditHero: (heroId: string, sheet: HeroSheet) => Promise<boolean>;
   onPaintArt: (target: ArtTarget, direction: string, reference: string | null) => Promise<void>;
   onChooseArt: (target: ArtTarget, keep: "new" | "old") => Promise<void>;
   onExit: () => void;
@@ -51,8 +55,11 @@ export function GameScreen({
   onSettingsChange,
   onResetSettings,
   onSubmit,
+  onRetell,
+  onSetRules,
   onStoryAction,
   onLearnTechnique,
+  onEditHero,
   onPaintArt,
   onChooseArt,
   onExit,
@@ -64,6 +71,10 @@ export function GameScreen({
   const [speakingId, setSpeakingId] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [rulesOpen, setRulesOpen] = useState(false);
+  // A backend started before the sandbox rules existed sends saves without them.
+  const rules = adventure.rules ?? DEFAULT_RULES;
+  const [retelling, setRetelling] = useState<{ id: number; text: string } | null>(null);
   const [chronicle, setChronicle] = useState<ChronicleView | null>(null);
   const [dismissedRecapTurn, setDismissedRecapTurn] = useState<number | null>(null);
   const [chapterDismissed, setChapterDismissed] = useState(false);
@@ -126,11 +137,11 @@ export function GameScreen({
   );
 
   const submit = useCallback(
-    (text: string) => {
+    (text: string, fate: Fate | null = null) => {
       // Runs inside the click/keypress, which lets mobile browsers play speech later.
       narrator.unlock();
       narrator.stop();
-      return onSubmit(text);
+      return onSubmit(text, fate);
     },
     [onSubmit],
   );
@@ -150,7 +161,7 @@ export function GameScreen({
   const sidebar = (
     <>
       {adventure.party.map((hero) => (
-        <CharacterCard key={hero.id} hero={hero} scene={adventure.scene} inCombat={inCombat} />
+        <CharacterCard key={hero.id} hero={hero} adventureId={adventure.adventure_id} scene={adventure.scene} inCombat={inCombat} onEditSheet={onEditHero} />
       ))}
       <SidePanels adventure={adventure} />
     </>
@@ -175,6 +186,16 @@ export function GameScreen({
             <option value={1}>1 · You DM</option><option value={2}>2 · You lead</option><option value={3}>3 · Shared</option><option value={4}>4 · AI leads</option><option value={5}>5 · AI DM</option>
           </select>
           <button className="btn-ghost !px-2 !py-1 text-xs" disabled={busy || adventure.undo_snapshot_id === null} onClick={() => { if (adventure.undo_snapshot_id !== null) setUndoConfirm({ id: adventure.undo_snapshot_id, text: adventure.undo_action ?? "Last action" }); }}>↶ Undo</button>
+          {adventure.retry_snapshot_id != null && (
+            <button className="btn-ghost !px-2 !py-1 text-xs" disabled={busy} title="Tell the last turn again: same action and dice, a different story"
+              onClick={() => { if (adventure.retry_snapshot_id != null) setRetelling({ id: adventure.retry_snapshot_id, text: adventure.undo_action ?? "Last turn" }); }}>
+              ↻ Retell
+            </button>
+          )}
+          <button className="btn-ghost !px-2 !py-1 text-xs" disabled={busy} onClick={() => setRulesOpen(true)}
+            title={`Rules of the tale: ${DIFFICULTIES.find((d) => d.level === rules.difficulty)?.name ?? "Adventure"}${rules.dice ? "" : ", no dice"}`}>
+            ⚖ Rules
+          </button>
           <IconButton
             label={settings.narratorEnabled ? "Turn narrator off" : "Turn narrator on"}
             active={settings.narratorEnabled}
@@ -273,6 +294,9 @@ export function GameScreen({
               disabled={busy}
               busy={submitting}
               inCombat={inCombat}
+              heroNames={partyNames}
+              adventureId={adventure.adventure_id}
+              chooseFate={!rules.dice}
               onSubmit={submit}
             />
           </div>
@@ -305,7 +329,7 @@ export function GameScreen({
 
       <AnimatePresence>
         {settingsOpen && (
-          <SettingsMenu storyControl={adventure.story_control} storyBusy={submitting} onStoryControl={(level) => void onStoryAction("control", level)} key="settings" settings={settings} voices={voices} onChange={onSettingsChange} onReset={onResetSettings} onClose={() => setSettingsOpen(false)} />
+          <SettingsMenu storyControl={adventure.story_control} richNarration={adventure.rich_narration} storyBusy={submitting} onStoryControl={(level) => void onStoryAction("control", level)} onRichNarration={(rich) => void onStoryAction("narration", rich)} key="settings" settings={settings} voices={voices} onChange={onSettingsChange} onReset={onResetSettings} onClose={() => setSettingsOpen(false)} />
         )}
       </AnimatePresence>
 
@@ -346,6 +370,13 @@ export function GameScreen({
         )}
       </AnimatePresence>
 
+      <AnimatePresence>
+        {rulesOpen && <RulesPanel key="rules" rules={rules} wishes={adventure.wishes ?? []} onSave={onSetRules} onClose={() => setRulesOpen(false)} />}
+        {retelling && (
+          <RetellDialog key="retell" action={retelling.text} busy={submitting} error={error} onClose={() => setRetelling(null)}
+            onRetell={(direction, remember) => { narrator.stop(); return onRetell(retelling.id, direction, remember); }} />
+        )}
+      </AnimatePresence>
       {undoConfirm && <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/90 p-4" role="dialog" aria-modal="true" aria-label="Undo last action">
         <div className="panel max-w-lg p-6"><h2 className="font-display text-xl text-gold-soft">Undo this action?</h2><p className="my-4 whitespace-pre-wrap break-words text-parchment">{undoConfirm.text}</p><p className="mb-4 text-sm text-mist">Restores the state before this action. Saved artwork files remain available.</p><div className="flex gap-3"><button disabled={submitting} className="btn-gold" onClick={async () => { narrator.stop(); if (await onStoryAction("undo", undoConfirm.id)) setUndoConfirm(null); }}>Undo action</button><button disabled={submitting} className="btn-ghost" onClick={() => setUndoConfirm(null)}>Cancel</button></div>{error && <p role="alert" className="mt-3 text-ember">{error}</p>}</div>
       </div>}

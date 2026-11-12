@@ -12,7 +12,8 @@ interface TitleScreenProps {
   onOpen: (adventureId: string) => void;
   onRename: (adventureId: string, name: string) => void;
   onDelete: (adventureId: string) => void;
-  onNew: () => void;
+  /** "sandbox": an open tale with heroes of the player's own making. "premade": The Whispering Darkness. */
+  onNew: (kind: "sandbox" | "premade") => void;
   onRetry: () => void;
 }
 
@@ -42,7 +43,7 @@ export function TitleScreen({ saves, providers, loading, error, onOpen, onRename
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.3, duration: 1.2 }}
         >
-          A Cinematic Tale of Shadow &amp; Wilds
+          Cinematic Tales of Your Own Making
         </motion.p>
         <motion.h1
           className="font-display text-6xl font-semibold tracking-[0.18em] sm:text-8xl"
@@ -74,7 +75,7 @@ export function TitleScreen({ saves, providers, loading, error, onOpen, onRename
           animate={{ opacity: 1 }}
           transition={{ delay: 1.4, duration: 1.5 }}
         >
-          The Whispering Darkness
+          Imagination is the only limit
         </motion.p>
 
         <motion.div
@@ -96,10 +97,15 @@ export function TitleScreen({ saves, providers, loading, error, onOpen, onRename
               Saved Tales ({saves.length})
             </button>
           )}
-          <button className={latest ? "btn-ghost py-3 font-display uppercase tracking-[0.2em]" : "btn-gold"} onClick={onNew} disabled={loading}>
-            {loading ? "Opening the tale…" : "New Adventure"}
+          <button className={latest ? "btn-ghost flex-col !gap-0.5 py-3 font-display uppercase tracking-[0.2em]" : "btn-gold flex-col !gap-0.5"} onClick={() => onNew("sandbox")} disabled={loading}>
+            <span>{loading ? "Opening the tale…" : "New Tale"}</span>
+            <span className="font-sans text-[0.68rem] normal-case tracking-normal text-mist">Your heroes, your world, no script</span>
           </button>
-          {latest && <p className="text-[0.7rem] text-mist/70">A new adventure starts a separate story; your other saves are kept.</p>}
+          <button className="btn-ghost flex-col !gap-0.5 py-2.5" onClick={() => onNew("premade")} disabled={loading}>
+            <span className="font-display text-xs uppercase tracking-[0.2em]">The Whispering Darkness</span>
+            <span className="text-[0.68rem] text-mist">A written story to play through</span>
+          </button>
+          {latest && <p className="text-[0.7rem] text-mist/70">A new tale is a separate story; your other saves are kept.</p>}
           {remoteBackend && <div className="space-y-2 text-sm text-mist">
             <p>{providers ? "Connected to your private server." : "Connect to your private server to play."}</p>
             <a className="block text-gold-soft underline" href={backendUrl("/api/health")} target="_blank" rel="noopener noreferrer">Sign in to private server</a>
@@ -188,8 +194,8 @@ function SaveRow({ save, disabled, onOpen, onRename, onDelete }: SaveRowProps) {
           </p>
           {save.last_happened && <p className="mt-1 line-clamp-2 font-serif text-[0.85rem] italic text-parchment/70">{save.last_happened}</p>}
           <div className="mt-1.5 flex flex-wrap gap-3">
-            {save.party.map((hero) => (
-              <span key={hero.name} className="text-[0.68rem] text-mist">
+            {save.party.map((hero, index) => (
+              <span key={`${index}-${hero.name}`} className="text-[0.68rem] text-mist">
                 <span style={{ color: hero.accent_color }}>●</span> {hero.name} {hero.hp}/{hero.max_hp} HP
               </span>
             ))}

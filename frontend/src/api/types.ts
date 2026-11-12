@@ -17,7 +17,160 @@ export interface Ability {
   kind: "attack" | "heal" | "control" | "utility" | "transform" | "cleanse" | "revive" | "technique";
   usable_in: "exploration" | "combat" | "any";
   cost: number;
-  blocked_by_radiance: boolean;
+  blocked_by_radiance?: boolean;
+  attack_attribute?: Attribute | null;
+  damage_dice?: string | null;
+  /** How a designed or improvised power plays: its check and effect blocks. */
+  composition?: Composition | null;
+  source?: "campaign" | "created" | "equipment" | "improvised";
+  damage_type?: string;
+  equipment_id?: string | null;
+  /** The player set its numbers by hand; the power budget leaves it alone. */
+  house_ruled?: boolean;
+  /** One line on how it plays, written by the server whenever the sheet changes. */
+  summary?: string;
+}
+
+export type Attribute = "might" | "agility" | "wits" | "spirit" | "presence";
+export type Pronouns = "she" | "he" | "they";
+export type EquipmentSlot = "weapon" | "armor" | "accessory";
+
+/** Something a hero wields or wears. Mirrors Equipment in backend/app/models/state.py. */
+export interface Equipment {
+  id: string;
+  slot: EquipmentSlot;
+  name: string;
+  description: string;
+  how_used: string;
+  qualities: string[];
+  attack_attribute: Attribute | null;
+  damage_dice: string | null;
+  damage_type: string;
+  armor_bonus: number;
+  max_agility_bonus: number | null;
+  advantage_on_skills: string[];
+}
+
+/** Everything on a hero's sheet the player may set. Mirrors HeroSheet in backend/app/models/forge.py. */
+export interface HeroSheet {
+  name: string;
+  pronouns: Pronouns;
+  role: string;
+  class_name: string;
+  concept: string;
+  ancestry: string;
+  biography: string;
+  level: number;
+  attributes: Record<Attribute, number>;
+  proficient_skills: string[];
+  max_hp: number;
+  hp: number | null;
+  armor_class: number;
+  resource_name: string;
+  resource_max: number;
+  resource_current: number | null;
+  equipment: Equipment[];
+  abilities: Ability[];
+  appearance: string;
+  attire: string;
+  features: string[];
+  palette: string[];
+  accent_color: string;
+  sigil: string;
+}
+
+export interface CreationQuestion {
+  question: string;
+  suggestions: string[];
+}
+
+export interface HeroDraftResponse {
+  sheet: HeroSheet;
+  questions: CreationQuestion[];
+  /** No AI was available: this is a plain starter sheet to edit by hand. */
+  degraded: boolean;
+}
+
+// Character creation. Mirrors backend/app/models/creation.py.
+
+export interface AncestryDefinition {
+  id: string;
+  name: string;
+  summary: string;
+  bonuses: Partial<Record<Attribute, number>>;
+  appearance: string;
+}
+
+export interface CallingDefinition {
+  id: string;
+  name: string;
+  summary: string;
+  base_hp: number;
+  base_armor_class: number;
+  max_agility_bonus: number;
+  resource_max: number;
+  attacks: Ability[];
+  skill_choices: string[];
+  skill_picks: number;
+  attire: string;
+  recommended_attributes: Record<Attribute, number>;
+}
+
+export interface OriginDefinition {
+  id: string;
+  name: string;
+  summary: string;
+  skill: string;
+  story_edge: string;
+}
+
+/** One hero as the player designed them; the server validates it and derives the sheet. */
+export interface HeroBuild {
+  role_id: string;
+  name: string;
+  pronouns: Pronouns;
+  ancestry: string;
+  calling: string;
+  origin: string;
+  attributes: Record<Attribute, number>;
+  skills: string[];
+  appearance: string;
+  attire: string;
+  features: string[];
+  accent_color: string | null;
+  sigil: string | null;
+  backstory: string;
+}
+
+export interface HeroRole {
+  id: string;
+  name: string;
+  tagline: string;
+  story: string;
+  default_name: string;
+  resource_name: string;
+  resource_summary: string;
+  origin_question: string;
+  gifts: Ability[];
+  sigil: string;
+  accent_color: string;
+  callings: CallingDefinition[];
+  origins: OriginDefinition[];
+  default_build: HeroBuild;
+}
+
+export interface CreationOptions {
+  campaign_id: string;
+  campaign_title: string;
+  premise: string;
+  roles: HeroRole[];
+  ancestries: AncestryDefinition[];
+  attributes: Attribute[];
+  point_buy: { budget: number; minimum: number; maximum: number; costs: Record<string, number>; hp_per_might_modifier: number };
+  skills: { id: string; name: string; attribute: Attribute }[];
+  accent_colors: string[];
+  sigils: string[];
+  name_max_length: number;
 }
 
 export interface InventoryItem {
@@ -70,6 +223,11 @@ export interface Character {
   inventory: InventoryItem[];
   visual: VisualIdentity;
   biography: string;
+  pronouns: string;
+  ancestry: string;
+  role: string;
+  concept: string;
+  equipment: Equipment[];
 }
 
 export interface NonPlayerCharacter {
@@ -142,6 +300,21 @@ export interface DiceRoll {
   target_number: number | null;
   target_label: string | null;
   outcome: RollOutcome;
+  /** With dice off nothing was rolled: "chosen" = the player decided it, "steady" = a fixed average. */
+  fated?: "" | "chosen" | "steady";
+}
+
+/** How the player says an action turns out when dice are off. */
+export type Fate = "success" | "failure" | "critical_success" | "critical_failure";
+
+/** The rules of one tale. Mirrors GameRules in backend/app/models/state.py. */
+export interface GameRules {
+  difficulty: number;
+  dice: boolean;
+  resource_costs: boolean;
+  rest_limits: boolean;
+  learn_by_doing: boolean;
+  house_rules: string[];
 }
 
 export type EntryKind = "narration" | "dialogue" | "player" | "roll" | "combat" | "system";
@@ -191,7 +364,16 @@ export interface Composition {
   attribute: string;
   skill: string | null;
   resource_spent: number;
-  effects: { kind: string; target: string; power: string; condition: string | null }[];
+  effects: EffectBlock[];
+}
+
+export interface EffectBlock {
+  kind: "damage" | "heal" | "condition" | "empower" | "narrative";
+  target: "enemy" | "all_enemies" | "self" | "ally" | "party";
+  power: "minor" | "moderate" | "major";
+  condition: string | null;
+  /** The hero's own name for a condition ("Frozen Solid"). */
+  label?: string | null;
 }
 
 export interface TechniqueOffer {
@@ -257,6 +439,9 @@ export interface ChapterPreview {
 export interface Adventure {
   adventure_id: string;
   campaign_title: string;
+  /** "sandbox" for an open tale; otherwise the premade story's id. */
+  campaign_id: string;
+  premise: string;
   turn_number: number;
   scene: SceneState;
   party: Character[];
@@ -277,9 +462,14 @@ export interface Adventure {
   chapter_number: number;
   chapter_title: string;
   story_control: number;
+  rich_narration: boolean;
   pending_chapter: ChapterPreview | null;
   undo_action: string | null;
   undo_snapshot_id: number | null;
+  /** Set when the last step was a turn that can be told again differently. */
+  retry_snapshot_id: number | null;
+  rules: GameRules;
+  wishes: string[];
 }
 
 export interface TurnResponse {

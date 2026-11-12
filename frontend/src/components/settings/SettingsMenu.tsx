@@ -9,8 +9,10 @@ const PREVIEW_LINE =
 
 interface SettingsMenuProps {
   storyControl: number;
+  richNarration: boolean;
   storyBusy: boolean;
   onStoryControl: (level: number) => void;
+  onRichNarration: (rich: boolean) => void;
   settings: Settings;
   voices: VoiceOptions;
   onChange: (patch: Partial<Settings>) => void;
@@ -18,7 +20,7 @@ interface SettingsMenuProps {
   onClose: () => void;
 }
 
-export function SettingsMenu({ storyControl, storyBusy, onStoryControl, settings, voices, onChange, onReset, onClose }: SettingsMenuProps) {
+export function SettingsMenu({ storyControl, richNarration, storyBusy, onStoryControl, onRichNarration, settings, voices, onChange, onReset, onClose }: SettingsMenuProps) {
   return (
     <motion.div
       className="fixed inset-0 z-50 flex items-stretch justify-center bg-ink/80 backdrop-blur-sm sm:items-center sm:p-6"
@@ -54,6 +56,10 @@ export function SettingsMenu({ storyControl, storyBusy, onStoryControl, settings
                 <option value={1}>1 · You are the DM</option><option value={2}>2 · You lead, AI adds touches</option><option value={3}>3 · Shared storytelling</option><option value={4}>4 · AI leads, you steer</option><option value={5}>5 · AI is the DM</option>
               </select>
             </label><p className="mt-2 text-xs text-mist">Saved with this adventure. Changes apply to the next turn; existing story stays as written. Levels 1–3 require your next-chapter direction.</p>
+            <label className="mt-4 flex items-start gap-3 text-sm text-parchment">
+              <input type="checkbox" className="mt-1" checked={richNarration} disabled={storyBusy} onChange={(event) => onRichNarration(event.target.checked)} />
+              <span>Rich narration<span className="block text-xs text-mist">The local AI writes each turn's story in full prose. Livelier, but turns take about 7–17 seconds instead of 2–6. Applies at story control 3–5; at 1–2 you lead the story.</span></span>
+            </label>
           </Section>
           <NarratorSection settings={settings} voices={voices} onChange={onChange} />
 
