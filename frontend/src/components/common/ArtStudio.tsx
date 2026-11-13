@@ -58,14 +58,11 @@ export function ArtStudio({ adventure, target, onPaint, onChoose, onClose }: Art
   const previousImage = useImageReference(previous?.image_key);
   const [choosing, setChoosing] = useState(false);
 
+  // Going back to the previous picture keeps what the player wrote (and pasted), ready for another try.
   const choose = async (keep: "new" | "old") => {
     setChoosing(true);
     try {
       await onChoose(target, keep);
-      if (keep === "old" && previous) {
-        setDirection(previous.direction);
-        setGuide(previous.reference || null);
-      }
     } finally {
       setChoosing(false);
     }
