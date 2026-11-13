@@ -197,6 +197,12 @@ interface NearbyPlaying {
 export const MAX_NEARBY_VOLUME = 2;
 const clampVolume = (volume: number) => Math.min(MAX_NEARBY_VOLUME, Math.max(0, Number.isFinite(volume) ? volume : 1));
 
+/** True once the player has clicked or pressed a key on the page (always true where browsers cannot tell). */
+function hasInteracted(): boolean {
+  const activation = (navigator as Navigator & { userActivation?: { hasBeenActive: boolean } }).userActivation;
+  return activation ? activation.hasBeenActive : true;
+}
+
 class AudioEngine {
   private context: AudioContext | null = null;
   private master: GainNode | null = null;
@@ -217,9 +223,23 @@ class AudioEngine {
       this.master = this.context.createGain();
       this.master.gain.value = this.volume * (this.ducked ? 0.35 : 1);
       this.master.connect(this.context.destination);
+      this.resumeOnFirstGesture();
     }
-    if (this.context.state === "suspended") void this.context.resume();
+    // Browsers let sound start only after the player has clicked or pressed a key on the page;
+    // asking earlier is refused (with a console warning each time), so wait for that.
+    if (this.context.state === "suspended" && hasInteracted()) void this.context.resume().catch(() => undefined);
     return this.context;
+  }
+
+  /** Sounds prepared before the player's first click or key press start playing with it. */
+  private resumeOnFirstGesture() {
+    if (hasInteracted()) return;
+    const events = ["pointerdown", "keydown", "touchend"] as const;
+    const resume = () => {
+      events.forEach((name) => window.removeEventListener(name, resume, true));
+      if (this.context?.state === "suspended") void this.context.resume().catch(() => undefined);
+    };
+    events.forEach((name) => window.addEventListener(name, resume, true));
   }
 
   setEnabled(enabled: boolean) {

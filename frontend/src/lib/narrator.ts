@@ -192,6 +192,25 @@ interface QueuedLine {
   audio: Promise<string | null> | null;
 }
 
+/** How long a browser voice may take to start speaking before it is given up on. */
+const START_TIMEOUT_MS = 6000;
+const NO_ANSWER = "no answer from the voice";
+
+/**
+ * The voice to read with when an online voice fails: a voice on the device in the same language
+ * (else the browser's default, null). Undefined when the failed voice was already on the device.
+ */
+function deviceFallbackVoice(failed: SpeechSynthesisVoice | null): SpeechSynthesisVoice | null | undefined {
+  if (!failed || failed.localService) return undefined;
+  const local = uniqueDeviceVoices().filter((voice) => voice.localService && voiceQuality(voice) !== "novelty");
+  const language = failed.lang.toLowerCase();
+  return (
+    local.find((voice) => voice.lang.toLowerCase() === language) ??
+    local.find((voice) => voice.lang.toLowerCase().slice(0, 2) === language.slice(0, 2)) ??
+    null
+  );
+}
+
 const delay = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 
 export class Narrator {
@@ -216,6 +235,8 @@ export class Narrator {
   private liveUtteranceDone: Promise<void> = Promise.resolve();
   private listeners = new Set<Listener>();
   private unlocked = false;
+  /** How long a voice may take to start before it counts as failed (tests shorten it). */
+  startTimeoutMs = START_TIMEOUT_MS;
 
   get supported(): boolean {
     return typeof window !== "undefined" && "speechSynthesis" in window;
@@ -236,7 +257,11 @@ export class Narrator {
   private setSpeaking(value: boolean) {
     if (this.speaking === value) return;
     this.speaking = value;
-    audio.setDucked(value);
+    try {
+      audio.setDucked(value);
+    } catch (error) {
+      console.warn("Could not lower the music for the narrator:", error); // never let it stop the voice
+    }
     this.listeners.forEach((listener) => listener(value));
   }
 
@@ -356,16 +381,22 @@ export class Narrator {
     }
   }
 
+  /**
+   * Reads text with a browser voice, one chunk at a time. Online voices (Edge "Natural") can fail or
+   * hang when their service does not answer, which used to leave the narrator silent. A chunk that
+   * fails is tried once more, then read with a voice on the device for the rest of the line.
+   */
   private speakDevice(text: string, settings: SpeechSettings, generation: number): Promise<void> {
     if (!this.supported) return Promise.resolve();
     const synth = window.speechSynthesis;
-    const voice = findDeviceVoice(settings.deviceVoiceId);
+    let voice = findDeviceVoice(settings.deviceVoiceId);
     const chunks = chunkText(text);
     return new Promise((resolve) => {
       let index = 0;
-      const next = () => {
-        if (generation !== this.generation || index >= chunks.length) return resolve();
-        const utterance = new SpeechSynthesisUtterance(chunks[index++]);
+      let retried = false;
+      const say = (chunk: string) => {
+        if (generation !== this.generation) return resolve();
+        const utterance = new SpeechSynthesisUtterance(chunk);
         if (voice) {
           utterance.voice = voice;
           utterance.lang = voice.lang;
@@ -377,16 +408,46 @@ export class Narrator {
         this.liveUtteranceDone = new Promise<void>((done) => (markDone = done));
         this.liveUtterance = utterance;
         let finished = false;
-        const finish = () => {
+        let started = false;
+        const finish = (failure: string | null) => {
           if (finished) return;
           finished = true;
+          window.clearTimeout(watchdog);
           if (this.liveUtterance === utterance) this.liveUtterance = null;
           markDone();
+          if (failure && generation === this.generation) {
+            // A voice that never answered is not worth waiting for twice.
+            const switching = retried || failure === NO_ANSWER;
+            const fallback = switching ? deviceFallbackVoice(voice) : voice;
+            if (fallback !== undefined) {
+              console.warn(`Narrator voice ${voice?.name ?? "(default)"} failed (${failure}); ${switching ? `using ${fallback?.name ?? "the default voice"}` : "trying again"}.`);
+              voice = fallback;
+              retried = true;
+              return say(chunk);
+            }
+            console.warn(`Narrator could not read a line (${failure}).`);
+          }
+          retried = false;
           next();
         };
-        utterance.onend = finish;
-        utterance.onerror = finish;
+        utterance.onstart = () => {
+          started = true;
+          window.clearTimeout(watchdog);
+        };
+        utterance.onend = () => finish(null);
+        utterance.onerror = (event: SpeechSynthesisErrorEvent) =>
+          finish(event.error === "interrupted" || event.error === "canceled" ? null : event.error || "error");
+        // An online voice whose service never answers neither starts nor fails; give up on it.
+        const watchdog = window.setTimeout(() => {
+          if (started || finished) return;
+          synth.cancel();
+          finish(NO_ANSWER);
+        }, this.startTimeoutMs);
         synth.speak(utterance);
+      };
+      const next = () => {
+        if (generation !== this.generation || index >= chunks.length) return resolve();
+        say(chunks[index++]);
       };
       next();
     });
