@@ -4,6 +4,7 @@ import { mediaUrl } from "../../api/connection";
 import type { Adventure } from "../../api/types";
 import { useImageReference } from "../../hooks/useImageUrl";
 import { SceneArt } from "../scene/SceneArt";
+import { GpuWaitNote } from "./GpuWaitNote";
 import { Sigil } from "./Sigil";
 
 /* A larger view of a portrait or the scene, where the player can paint it for the
@@ -178,7 +179,7 @@ export function ArtStudio({ adventure, target, onPaint, onChoose, onClose }: Art
           )}
           {painting && (
             <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-ink/90 to-transparent px-3 pb-3 pt-8 text-center text-sm italic text-gold-soft">
-              <span className="animate-pulse">Painting{isScene ? " the scene" : ` ${name}`}…</span>
+              <span className="animate-pulse">{reference?.waiting ? "Waiting for room on the graphics card…" : `Painting${isScene ? " the scene" : ` ${name}`}…`}</span>
             </div>
           )}
         </div>
@@ -251,9 +252,12 @@ export function ArtStudio({ adventure, target, onPaint, onChoose, onClose }: Art
           </div>
 
           {adventure.images_enabled ? (
-            <button className="btn-gold self-start" disabled={painting} onClick={paint}>
-              {painting ? "Painting…" : painted ? "Regenerate" : isScene ? "Generate scene art" : "Generate portrait"}
-            </button>
+            <>
+              <button className="btn-gold self-start" disabled={painting} onClick={paint}>
+                {painting ? "Painting…" : painted ? "Regenerate" : isScene ? "Generate scene art" : "Generate portrait"}
+              </button>
+              {reference?.status === "pending" && reference.waiting && <GpuWaitNote reference={reference} />}
+            </>
           ) : (
             <p className="rounded-lg border border-gold/20 bg-gold/[0.05] px-3 py-2 text-sm text-gold-soft">
               No image generator is connected yet, so the game uses its hand-drawn crests and scenes. Once one is set up, this button paints the artwork.

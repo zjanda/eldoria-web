@@ -7,6 +7,7 @@ export interface TurnFeedback {
   rolls: DiceRoll[];
   newEntryIds: string[];
   degraded: boolean;
+  degradedReason: string;
 }
 
 // The tale open in this tab, so a reloaded page returns to it instead of the title screen.
@@ -168,6 +169,7 @@ export function useAdventure() {
         rolls: response.rolls,
         newEntryIds: response.new_entries.map((e) => e.id),
         degraded: response.degraded,
+        degradedReason: response.degraded_reason ?? "",
       });
       return true;
     } catch (e) {

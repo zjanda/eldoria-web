@@ -1,7 +1,9 @@
 import { motion } from "framer-motion";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import type { NarrativeEntry, NonPlayerCharacter } from "../../api/types";
 import type { TextSpeed } from "../../hooks/useSettings";
+import type { WordListener } from "../../lib/narrator";
+import { highlightWord, wordStartAt } from "../../lib/readAlong";
 import { RichText } from "../common/GlossaryText";
 import { Portrait } from "../common/Portrait";
 import { Typewriter } from "./Typewriter";
@@ -18,7 +20,7 @@ interface NarrativeLogProps {
   holdNew: boolean;
   textSpeed: TextSpeed;
   textScale: number;
-  onSpeak?: (text: string) => void;
+  onSpeak?: (text: string, onWord?: WordListener) => void;
   onSpeakerChange: (speakerId: string | null) => void;
   onRevealDone: () => void;
 }
@@ -61,6 +63,20 @@ export function NarrativeLog({ entries, npcs, newEntryIds, revealActive, holdNew
 
   const advance = useCallback(() => setRevealIndex((i) => i + 1), []);
 
+  // Read a line aloud from a character offset (0 = the whole line), highlighting each word as it's read.
+  const speakFrom = useCallback(
+    (entry: NarrativeEntry, offset: number) => {
+      if (!onSpeak) return;
+      const prefix = entry.kind === "dialogue" && offset === 0 ? `${entry.speaker_name} says: ` : "";
+      const base = offset - prefix.length;
+      onSpeak(prefix + entry.text.slice(offset), (word) =>
+        highlightWord(scrollRef.current, entry.id, word && { start: base + word.start, end: base + word.end }),
+      );
+    },
+    [onSpeak],
+  );
+  useEffect(() => () => highlightWord(null, "", null), []);
+
   return (
     <div
       ref={scrollRef}
@@ -86,7 +102,7 @@ export function NarrativeLog({ entries, npcs, newEntryIds, revealActive, holdNew
                 entry={entry}
                 text={text}
                 npc={entry.speaker_id ? npcById.get(entry.speaker_id) : undefined}
-                onSpeak={onSpeak && !typing && (entry.kind === "narration" || entry.kind === "dialogue") ? onSpeak : undefined}
+                onSpeakFrom={onSpeak && !typing && (entry.kind === "narration" || entry.kind === "dialogue") ? (offset) => speakFrom(entry, offset) : undefined}
               />
             </motion.div>
           );
@@ -105,7 +121,7 @@ function SpeakButton({ onClick }: { onClick: () => void }) {
         onClick();
       }}
       aria-label="Read aloud"
-      title="Read aloud"
+      title="Read aloud (or click any word to start from there)"
     >
       🔊
     </button>
@@ -118,12 +134,26 @@ export function EntryView({
   text,
   npc,
   onSpeak,
+  onSpeakFrom,
 }: {
   entry: NarrativeEntry;
   text: ReactNode;
   npc?: NonPlayerCharacter;
   onSpeak?: (text: string) => void;
+  /** Read the line aloud from a character offset; clicking a word starts there. */
+  onSpeakFrom?: (offset: number) => void;
 }) {
+  const speakWhole = onSpeakFrom ? () => onSpeakFrom(0) : onSpeak && (() => onSpeak(entry.kind === "dialogue" ? `${entry.speaker_name} says: ${entry.text}` : entry.text));
+  const clickWord = (event: MouseEvent<HTMLSpanElement>) => {
+    if (!onSpeakFrom) return;
+    const offset = wordStartAt(event.currentTarget, entry.text, event.clientX, event.clientY);
+    if (offset !== null) onSpeakFrom(offset);
+  };
+  const body = (
+    <span data-entry-text={entry.id} onClick={onSpeakFrom ? clickWord : undefined}>
+      {text}
+    </span>
+  );
   switch (entry.kind) {
     case "player":
       return (
@@ -138,8 +168,8 @@ export function EntryView({
       return (
         <p className="narration-text whitespace-pre-line">
           {entry.speaker_name === "DM" && <span className="label mr-2 text-gold-soft">Dungeon Master</span>}
-          {text}
-          {onSpeak && <SpeakButton onClick={() => onSpeak(entry.text)} />}
+          {body}
+          {speakWhole && <SpeakButton onClick={speakWhole} />}
         </p>
       );
     case "dialogue":
@@ -155,7 +185,7 @@ export function EntryView({
               {entry.speaker_name}
             </p>
             <p className="font-serif text-[0.97em] italic leading-snug text-parchment/95">
-              “{text}”{onSpeak && <SpeakButton onClick={() => onSpeak(`${entry.speaker_name} says: ${entry.text}`)} />}
+              “{body}”{speakWhole && <SpeakButton onClick={speakWhole} />}
             </p>
           </div>
         </div>

@@ -246,6 +246,8 @@ export interface ImageReference {
   cache_key: string;
   status: "fallback" | "pending" | "ready" | "failed";
   url: string | null;
+  /** Set while a pending picture waits for room on the graphics card: why, in words. */
+  waiting?: string | null;
 }
 
 export interface SceneState {
@@ -500,6 +502,8 @@ export interface TurnResponse {
   adventure: Adventure;
   provider_used: string;
   degraded: boolean;
+  /** Why the AI DM was skipped: "slow", "offline", "error", or "" when unknown. */
+  degraded_reason?: string;
 }
 
 export interface SaveSummary {

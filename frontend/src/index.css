@@ -113,3 +113,9 @@
     transition-duration: 0.001ms !important;
   }
 }
+
+/* The word the narrator is reading (CSS Custom Highlight API; browsers without it just skip the highlight). */
+::highlight(narrator-word) {
+  background-color: rgba(201, 161, 74, 0.32);
+  color: #f3e6c8;
+}

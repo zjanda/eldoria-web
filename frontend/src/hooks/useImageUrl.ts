@@ -44,7 +44,8 @@ export function useImageReference(key: string | null | undefined, initial?: Imag
         if (cancelled) return;
         cache.set(key, next);
         setReference(next);
-        if (next.status !== "pending" || ++polls >= MAX_POLLS) return;
+        // A picture waiting for the graphics card can wait a long time; keep checking until it starts.
+        if (next.status !== "pending" || (!next.waiting && ++polls >= MAX_POLLS)) return;
       } catch {
         if (cancelled || ++polls >= MAX_POLLS) return;
       }

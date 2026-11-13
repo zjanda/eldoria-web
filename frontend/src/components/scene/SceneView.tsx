@@ -1,7 +1,8 @@
 import { AnimatePresence, motion } from "framer-motion";
 import type { Adventure, NonPlayerCharacter } from "../../api/types";
-import { useImageUrl } from "../../hooks/useImageUrl";
+import { useImageReference } from "../../hooks/useImageUrl";
 import { useOpenArt } from "../common/ArtStudio";
+import { GpuWaitNote } from "../common/GpuWaitNote";
 import { Portrait } from "../common/Portrait";
 import { CombatHud } from "./CombatHud";
 import { SceneArt } from "./SceneArt";
@@ -19,7 +20,8 @@ const LIGHTING_LABEL ={ radiant: "Radiant light", dim: "Dim light", dark: "Darkn
 
 export function SceneView({ adventure, speakingId }: SceneViewProps) {
   const { scene } = adventure;
-  const imageUrl = useImageUrl(scene.image?.cache_key, scene.image);
+  const image = useImageReference(scene.image?.cache_key, scene.image);
+  const imageUrl = image?.status === "ready" ? image.url : null;
   const sceneKey = `${scene.scene_id}:${scene.visual_state}`;
   const presentNpcs = adventure.npcs.filter((npc) => scene.present_npc_ids.includes(npc.id));
   const openArt = useOpenArt();
@@ -68,8 +70,9 @@ export function SceneView({ adventure, speakingId }: SceneViewProps) {
         <h2 className="text-shadow max-w-[60vw] font-display text-lg tracking-wider text-parchment sm:max-w-none sm:text-3xl">{scene.title}</h2>
         <p className="mt-1 text-[0.72rem] uppercase tracking-[0.18em] text-mist/80 text-shadow">
           {LIGHTING_LABEL[scene.lighting]}
-          {scene.image?.status === "pending" && <span className="ml-3 animate-pulse text-gold/70">· painting the scene…</span>}
+          {image?.status === "pending" && !image.waiting && <span className="ml-3 animate-pulse text-gold/70">· painting the scene…</span>}
         </p>
+        {image?.status === "pending" && image.waiting && <GpuWaitNote reference={image} compact />}
       </motion.div>
 
       <button

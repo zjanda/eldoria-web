@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useState } from "react";
 import { actionDraftKey, clearDraft, readDraft, writeDraft } from "../../lib/drafts";
+import { useDictation } from "../../hooks/useDictation";
 import type { Fate, SuggestedAction, TechniqueOffer } from "../../api/types";
 
 const FATES: { id: Fate | null; label: string; title: string }[] = [
@@ -29,6 +30,7 @@ interface ActionComposerProps {
 }
 
 const MAX_LENGTH = 600;
+const DM_HINT = "Write as the Dungeon Master instead of as your heroes: your words become the story, with no dice rolled.";
 
 export function ActionComposer({ storyControl, onDm, suggestions, offers, onLearn, disabled, busy, inCombat, heroNames, adventureId, chooseFate, onSubmit }: ActionComposerProps) {
   const draftKey = actionDraftKey(adventureId);
@@ -43,9 +45,11 @@ export function ActionComposer({ storyControl, onDm, suggestions, offers, onLear
   const everyone = heroNames.length > 1 ? `${heroNames.slice(0, -1).join(", ")} and ${heroNames[heroNames.length - 1]}` : first;
   const [dm, setDm] = useState(false);
   const dmActive = dm && storyControl < 5;
+  const dictation = useDictation(text, setText);
 
   const submit = async (value: string) => {
     if (!value.trim() || disabled) return;
+    dictation.stop();
     const ok = await (dmActive ? onDm(value) : onSubmit(value, chooseFate ? fate : null));
     if (ok) {
       setText("");
@@ -57,9 +61,9 @@ export function ActionComposer({ storyControl, onDm, suggestions, offers, onLear
     <div className="border-t border-gold/10 bg-night-950/80 px-3 pb-3 pt-2.5 backdrop-blur sm:px-5">
       <div className="mx-auto max-w-3xl">
         {storyControl < 5 && <div className="mb-2">
-          {storyControl < 4 ? <button type="button" className={storyControl === 1 ? "btn-gold !py-1 text-xs" : "chip"} disabled={disabled} aria-pressed={dmActive} onClick={() => setDm(!dm)}>✒ {dmActive ? "Speaking as DM" : "Speak as DM"}</button>
-            : <details><summary className="cursor-pointer text-xs text-mist">Story tools</summary><button type="button" className="chip mt-1" disabled={disabled} aria-pressed={dmActive} onClick={() => setDm(!dm)}>✒ {dmActive ? "Speaking as DM" : "Speak as DM"}</button></details>}
-          {dmActive && <p className="mt-1 text-xs text-gold-soft">Your words become DM narration. Explicit effects are translated and checked by the game.</p>}
+          {storyControl < 4 ? <button type="button" className={storyControl === 1 ? "btn-gold !py-1 text-xs" : "chip"} disabled={disabled} aria-pressed={dmActive} onClick={() => setDm(!dm)} title={DM_HINT}>✒ {dmActive ? "Narrating as DM" : "Narrate as DM"}</button>
+            : <details><summary className="cursor-pointer text-xs text-mist">Story tools</summary><button type="button" className="chip mt-1" disabled={disabled} aria-pressed={dmActive} onClick={() => setDm(!dm)} title={DM_HINT}>✒ {dmActive ? "Narrating as DM" : "Narrate as DM"}</button></details>}
+          {dmActive && <p className="mt-1 text-xs text-gold-soft">You are the DM: what you write becomes the story as told, with no dice. Stated changes (a place, a foe, an item, damage) are applied if the rules allow them.</p>}
         </div>}
         <AnimatePresence mode="wait">
           {busy ? (
@@ -160,10 +164,29 @@ export function ActionComposer({ storyControl, onDm, suggestions, offers, onLear
             }
             className="min-h-[3rem] flex-1 resize-none rounded-lg border border-gold/20 bg-night-900/90 px-3.5 py-2.5 font-serif text-[1.05rem] text-parchment placeholder:font-sans placeholder:text-sm placeholder:text-mist/50 focus:border-gold/60 focus:outline-none disabled:opacity-50"
           />
+          {dictation.supported && (
+            <button
+              type="button"
+              className={`flex h-[3rem] w-[3rem] shrink-0 items-center justify-center rounded-lg border transition ${
+                dictation.listening ? "animate-pulse border-ember/70 bg-ember/15 text-ember" : "border-gold/25 text-gold-soft hover:border-gold/60 hover:text-parchment"
+              }`}
+              disabled={disabled}
+              onClick={dictation.toggle}
+              aria-pressed={dictation.listening}
+              aria-label={dictation.listening ? "Stop listening" : "Speak instead of typing"}
+              title={dictation.listening ? "Listening… click to stop" : "Speak instead of typing"}
+            >
+              <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" aria-hidden>
+                <rect x="9" y="3" width="6" height="11" rx="3" />
+                <path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" />
+              </svg>
+            </button>
+          )}
           <button type="submit" className="btn-gold h-[3rem] px-5" disabled={disabled || !text.trim()}>
             {dmActive ? "Narrate" : "Act"}
           </button>
         </form>
+        {dictation.problem && <p role="alert" className="mt-1.5 text-xs text-ember">{dictation.problem}</p>}
       </div>
     </div>
   );

@@ -144,19 +144,46 @@ function friendlyLabel(voice: SpeechSynthesisVoice): string {
     .trim();
 }
 
+/** A piece of a line read as one utterance, with where each of its characters sits in the line. */
+interface SpokenChunk {
+  text: string;
+  origin: number[];
+}
+
 /** Split long text into sentence groups; some engines stop after ~15 seconds of one utterance. */
-function chunkText(text: string, maxLength = 220): string[] {
-  const sentences = text.replace(/\s+/g, " ").match(/[^.!?…]+[.!?…]+["”’)]*\s*|[^.!?…]+$/g) ?? [text];
-  const chunks: string[] = [];
-  let current = "";
-  for (const sentence of sentences) {
-    if ((current + sentence).length > maxLength && current) {
-      chunks.push(current.trim());
-      current = "";
-    }
-    current += sentence;
+export function chunkText(text: string, maxLength = 220): SpokenChunk[] {
+  // Runs of whitespace are read as one space; remember where every kept character came from.
+  let flat = "";
+  const origin: number[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const space = /\s/.test(text[i]);
+    if (space && flat.endsWith(" ")) continue;
+    flat += space ? " " : text[i];
+    origin.push(i);
   }
-  if (current.trim()) chunks.push(current.trim());
+  const chunks: SpokenChunk[] = [];
+  const add = (start: number, end: number) => {
+    const slice = flat.slice(start, end);
+    const lead = slice.length - slice.trimStart().length;
+    const trimmed = slice.trim();
+    if (trimmed) chunks.push({ text: trimmed, origin: origin.slice(start + lead, start + lead + trimmed.length) });
+  };
+  const sentences = [...flat.matchAll(/[^.!?…]+[.!?…]+["”’)]*\s*|[^.!?…]+$/g)];
+  if (!sentences.length) {
+    add(0, flat.length);
+    return chunks;
+  }
+  let start = sentences[0].index ?? 0;
+  let end = start;
+  for (const sentence of sentences) {
+    const sentenceEnd = (sentence.index ?? 0) + sentence[0].length;
+    if (sentenceEnd - start > maxLength && end > start) {
+      add(start, end);
+      start = sentence.index ?? 0;
+    }
+    end = sentenceEnd;
+  }
+  add(start, end);
   return chunks;
 }
 
@@ -181,6 +208,8 @@ export function pickVoice(voices: NarratorVoice[], gender: "female" | "male"): N
 }
 
 type Listener = (speaking: boolean) => void;
+/** The word being read, as character offsets into the line that was passed in; null when the line ends. */
+export type WordListener = (word: { start: number; end: number } | null) => void;
 
 /** How one line is spoken, fixed when the line is queued so later setting changes cannot alter it. */
 type SpeechSettings = Omit<NarratorConfig, "enabled">;
@@ -190,6 +219,7 @@ interface QueuedLine {
   settings: SpeechSettings;
   // Cloud lines start synthesising as soon as they are queued, so playback has no gaps.
   audio: Promise<string | null> | null;
+  onWord?: WordListener;
 }
 
 /** How long a browser voice may take to start speaking before it is given up on. */
@@ -234,6 +264,7 @@ export class Narrator {
   /** Resolves once the most recent utterance has ended or reported its cancellation. */
   private liveUtteranceDone: Promise<void> = Promise.resolve();
   private listeners = new Set<Listener>();
+  private wordListener: WordListener | null = null;
   private unlocked = false;
   /** How long a voice may take to start before it counts as failed (tests shorten it). */
   startTimeoutMs = START_TIMEOUT_MS;
@@ -319,6 +350,8 @@ export class Narrator {
   stop() {
     this.generation += 1;
     this.queue = [];
+    this.wordListener?.(null);
+    this.wordListener = null;
     this.activeDrain = null;
     if (this.supported) window.speechSynthesis.cancel();
     if (this.currentAudio) {
@@ -342,10 +375,10 @@ export class Narrator {
    * Interrupt and read this text now (replay buttons, voice previews). `overrides` apply to this
    * line only; the narrator's own settings are never changed, so nothing has to be restored.
    */
-  speakNow(text: string, overrides?: Partial<NarratorConfig>) {
+  speakNow(text: string, overrides?: Partial<NarratorConfig>, onWord?: WordListener) {
     this.stop();
     const generation = this.generation;
-    this.queue.push(this.queueItem(text, { ...this.currentSettings(), ...overrides }));
+    this.queue.push(this.queueItem(text, { ...this.currentSettings(), ...overrides }, onWord));
     this.activeDrain = generation;
     this.setSpeaking(true);
     // Speech queued before the cancelled utterance has finished can be dropped or spoken with the
@@ -366,13 +399,19 @@ export class Narrator {
     this.setSpeaking(true);
     while (this.queue.length && generation === this.generation) {
       const item = this.queue.shift()!;
+      this.wordListener = item.onWord ?? null;
       try {
         const url = item.audio ? await item.audio : null;
         if (url) await this.playAudio(url, item.settings, generation);
         // Device voice is the fallback if an AI voice line could not be generated.
-        else if (generation === this.generation) await this.speakDevice(item.text, item.settings, generation);
+        else if (generation === this.generation) await this.speakDevice(item.text, item.settings, generation, item.onWord);
       } catch (error) {
         console.warn("Narrator could not speak:", error);
+      } finally {
+        if (this.wordListener === (item.onWord ?? null)) {
+          item.onWord?.(null);
+          this.wordListener = null;
+        }
       }
     }
     if (generation === this.generation) {
@@ -386,7 +425,7 @@ export class Narrator {
    * hang when their service does not answer, which used to leave the narrator silent. A chunk that
    * fails is tried once more, then read with a voice on the device for the rest of the line.
    */
-  private speakDevice(text: string, settings: SpeechSettings, generation: number): Promise<void> {
+  private speakDevice(text: string, settings: SpeechSettings, generation: number, onWord?: WordListener): Promise<void> {
     if (!this.supported) return Promise.resolve();
     const synth = window.speechSynthesis;
     let voice = findDeviceVoice(settings.deviceVoiceId);
@@ -394,9 +433,9 @@ export class Narrator {
     return new Promise((resolve) => {
       let index = 0;
       let retried = false;
-      const say = (chunk: string) => {
+      const say = (chunk: SpokenChunk) => {
         if (generation !== this.generation) return resolve();
-        const utterance = new SpeechSynthesisUtterance(chunk);
+        const utterance = new SpeechSynthesisUtterance(chunk.text);
         if (voice) {
           utterance.voice = voice;
           utterance.lang = voice.lang;
@@ -435,6 +474,14 @@ export class Narrator {
           window.clearTimeout(watchdog);
         };
         utterance.onend = () => finish(null);
+        // Voices that report word boundaries let the reader follow along (and see where to click).
+        utterance.onboundary = (event: SpeechSynthesisEvent) => {
+          if (!onWord || event.name !== "word" || generation !== this.generation) return;
+          const at = event.charIndex;
+          if (at < 0 || at >= chunk.origin.length) return;
+          const length = event.charLength || (/^\S+/.exec(chunk.text.slice(at))?.[0].length ?? 1);
+          onWord({ start: chunk.origin[at], end: chunk.origin[Math.min(at + length, chunk.origin.length) - 1] + 1 });
+        };
         utterance.onerror = (event: SpeechSynthesisErrorEvent) =>
           finish(event.error === "interrupted" || event.error === "canceled" ? null : event.error || "error");
         // An online voice whose service never answers neither starts nor fails; give up on it.
@@ -453,9 +500,9 @@ export class Narrator {
     });
   }
 
-  private queueItem(text: string, settings: SpeechSettings): QueuedLine {
+  private queueItem(text: string, settings: SpeechSettings, onWord?: WordListener): QueuedLine {
     const cloud = settings.source === "cloud" && settings.cloudVoiceId;
-    return { text, settings, audio: cloud ? this.fetchAudio(text, settings.cloudVoiceId) : null };
+    return { text, settings, audio: cloud ? this.fetchAudio(text, settings.cloudVoiceId) : null, onWord };
   }
 
   private async fetchAudio(text: string, voiceId: string): Promise<string | null> {

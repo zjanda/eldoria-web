@@ -5,7 +5,7 @@ import type { TurnFeedback } from "../hooks/useAdventure";
 import type { Settings, TextSize } from "../hooks/useSettings";
 import type { VoiceOptions } from "../hooks/useVoices";
 import { audio } from "../lib/audio";
-import { narrator } from "../lib/narrator";
+import { narrator, type WordListener } from "../lib/narrator";
 import { ActionComposer } from "./actions/ActionComposer";
 import { ChapterEnd } from "./ChapterEnd";
 import { ArtStudio, ArtStudioOpener, type ArtTarget } from "./common/ArtStudio";
@@ -45,6 +45,14 @@ interface GameScreenProps {
   onChooseArt: (target: ArtTarget, keep: "new" | "old") => Promise<void>;
   onExit: () => void;
   onDismissError: () => void;
+}
+
+/** Why the simple keyword reader handled a turn instead of the AI Dungeon Master. */
+function fallbackMessage(reason: string): string {
+  if (reason === "slow")
+    return "The AI Dungeon Master took too long to answer (the graphics card may be busy with a game or other AI), so the simpler keyword reader handled this turn.";
+  if (reason === "offline") return "The AI Dungeon Master isn't running (is Ollama started?), so the simpler keyword reader handled this turn.";
+  return "The AI Dungeon Master couldn't answer this time, so the simpler keyword reader handled this turn.";
 }
 
 export function GameScreen({
@@ -151,9 +159,9 @@ export function GameScreen({
     },
     [onSubmit],
   );
-  const speak = useCallback((text: string) => {
+  const speak = useCallback((text: string, onWord?: WordListener) => {
     narrator.unlock();
-    narrator.speakNow(text);
+    narrator.speakNow(text, undefined, onWord);
   }, []);
 
   const finishDice = useCallback(() => setPhase("reveal"), []);
@@ -365,7 +373,7 @@ export function GameScreen({
             exit={{ opacity: 0 }}
           >
             <div className="flex items-start justify-between gap-3">
-              <span>{error ?? "The AI Dungeon Master could not be reached (is Ollama running?), so the keyword reader handled this turn."}</span>
+              <span>{error ?? fallbackMessage(feedback?.degradedReason ?? "")}</span>
               {error && (
                 <button className="text-mist hover:text-parchment" onClick={onDismissError} aria-label="Dismiss">
                   ✕
