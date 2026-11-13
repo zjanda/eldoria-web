@@ -182,13 +182,20 @@ export interface NearbyLayer {
   takes: AudioBuffer[];
   /** Identifies the takes, so the same layer is not restarted when nothing changed. */
   signature: string;
+  /** The player's level for this sound: 1 is the normal level, 0 silent, up to 2 twice as loud. */
+  volume: number;
 }
 
 interface NearbyPlaying {
   signature: string;
   loop: Loop | null;
   timer: number | undefined;
+  /** The player's own level for this sound, between the sound and the master volume. */
+  volume: GainNode;
 }
+
+export const MAX_NEARBY_VOLUME = 2;
+const clampVolume = (volume: number) => Math.min(MAX_NEARBY_VOLUME, Math.max(0, Number.isFinite(volume) ? volume : 1));
 
 class AudioEngine {
   private context: AudioContext | null = null;
@@ -397,7 +404,8 @@ class AudioEngine {
 
   /**
    * Play these nearby sounds quietly under the music and ambience, replacing the previous set.
-   * Layers already playing with the same takes carry on undisturbed.
+   * Layers already playing with the same takes carry on undisturbed; only their level follows
+   * the player's volume for them.
    */
   setNearby(layers: NearbyLayer[]) {
     this.wantedNearby = layers;
@@ -406,20 +414,27 @@ class AudioEngine {
     if (!context || !this.master) return;
     const wanted = new Map(layers.filter((layer) => layer.takes.length).map((layer) => [layer.id, layer]));
     for (const [id, playing] of this.nearby) {
-      if (wanted.get(id)?.signature !== playing.signature) this.stopNearbyLayer(id);
+      const layer = wanted.get(id);
+      if (layer?.signature !== playing.signature) this.stopNearbyLayer(id);
+      else playing.volume.gain.setTargetAtTime(clampVolume(layer.volume), context.currentTime, 0.1);
     }
     for (const layer of wanted.values()) {
       if (this.nearby.has(layer.id)) continue;
-      const playing: NearbyPlaying = { signature: layer.signature, loop: null, timer: undefined };
+      const volume = context.createGain();
+      volume.gain.value = clampVolume(layer.volume);
+      volume.connect(this.master);
+      const playing: NearbyPlaying = { signature: layer.signature, loop: null, timer: undefined, volume };
       this.nearby.set(layer.id, playing);
-      if (layer.kind === "loop") playing.loop = startLoop(context, this.master, layer.takes, NEARBY_TARGET_RMS);
+      if (layer.kind === "loop") playing.loop = startLoop(context, volume, layer.takes, NEARBY_TARGET_RMS);
       else this.scheduleOneShot(layer, playing, between(6, 20));
     }
   }
 
-  /** What is playing now, for checks and the settings screen: layer id to its kind and takes. */
-  nearbyPlaying(): { id: string; signature: string; looping: boolean }[] {
-    return [...this.nearby.entries()].map(([id, playing]) => ({ id, signature: playing.signature, looping: playing.loop !== null }));
+  /** What is playing now, for checks: layer id, its takes, and the player's level for it. */
+  nearbyPlaying(): { id: string; signature: string; looping: boolean; volume: number }[] {
+    return [...this.nearby.entries()].map(([id, playing]) => ({
+      id, signature: playing.signature, looping: playing.loop !== null, volume: playing.volume.gain.value,
+    }));
   }
 
   /** A one-off sound (an owl, bats) now and then, from a random side. */
@@ -439,7 +454,7 @@ class AudioEngine {
       gain.gain.setTargetAtTime(0, now + Math.max(0.2, duration - 0.8), 0.25);
       const pan = context.createStereoPanner();
       pan.pan.value = between(-0.7, 0.7);
-      source.connect(gain).connect(pan).connect(this.master);
+      source.connect(gain).connect(pan).connect(playing.volume);
       source.start(now, start, duration);
       source.onended = () => {
         gain.disconnect();
@@ -455,6 +470,8 @@ class AudioEngine {
     if (!playing) return;
     window.clearTimeout(playing.timer);
     if (playing.loop && this.context) stopLoop(this.context, playing.loop);
+    // A one-off may still be ringing out; release the level control once everything has faded.
+    window.setTimeout(() => playing.volume.disconnect(), playing.loop ? 4600 : 13000);
   }
 
   private stopAllNearby() {

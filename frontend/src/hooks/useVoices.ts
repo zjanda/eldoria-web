@@ -41,8 +41,9 @@ export function useVoices(settings: Settings, update: (patch: Partial<Settings>)
     if (!deviceVoices.length) return;
     if (!settings.deviceVoiceId || !deviceVoices.some((v) => v.id === settings.deviceVoiceId)) {
       // A choice saved by an older version (a bare voiceURI) keeps its voice under the new id form.
+      // Only to a voice still on offer: a saved robotic voice is replaced by a natural one.
       const migrated = migrateDeviceVoiceId(settings.deviceVoiceId);
-      if (migrated) return update({ deviceVoiceId: migrated });
+      if (migrated && deviceVoices.some((v) => v.id === migrated)) return update({ deviceVoiceId: migrated });
       const pick = pickVoice(deviceVoices, settings.voiceGender);
       if (pick) update({ deviceVoiceId: pick.id });
     }

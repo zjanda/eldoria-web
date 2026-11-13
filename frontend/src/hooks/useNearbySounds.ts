@@ -35,7 +35,7 @@ type Verdict = { url: string; buffer: AudioBuffer | null; ok: boolean };
  * while the player has nearby sounds switched on. Each new take is measured before it is played;
  * a take that fails (a hum where drips were wanted) is sent back once for a retake with a new seed.
  */
-export function useNearbySounds(adventure: Adventure, wanted: boolean): NearbySounds {
+export function useNearbySounds(adventure: Adventure, wanted: boolean, volumes: Record<string, number> = {}): NearbySounds {
   const available = Boolean(adventure.sounds_enabled);
   const active = available && wanted;
   const adventureId = adventure.adventure_id;
@@ -147,7 +147,10 @@ export function useNearbySounds(adventure: Adventure, wanted: boolean): NearbySo
       .map((take) => verdicts[mediaUrl(take.url!)])
       .filter((verdict): verdict is Verdict => Boolean(verdict?.ok && verdict.buffer));
     if (usable.length) {
-      playable.push({ id: layer.id, kind: layer.kind, takes: usable.map((verdict) => verdict.buffer!), signature: usable.map((verdict) => verdict.url).join("|") });
+      playable.push({
+        id: layer.id, kind: layer.kind, takes: usable.map((verdict) => verdict.buffer!),
+        signature: usable.map((verdict) => verdict.url).join("|"), volume: volumes[layer.id] ?? 1,
+      });
     }
     const status: NearbyLayerStatus = usable.length
       ? "playing"
@@ -158,7 +161,7 @@ export function useNearbySounds(adventure: Adventure, wanted: boolean): NearbySo
           : "making";
     statuses.push({ id: layer.id, label: layer.label, status, direction: layer.direction });
   }
-  const playableSignature = active ? playable.map((layer) => `${layer.id}=${layer.signature}`).join(";") : "";
+  const playableSignature = active ? playable.map((layer) => `${layer.id}=${layer.signature}@${layer.volume}`).join(";") : "";
   useEffect(() => {
     audio.setNearby(active ? playable : []);
   }, [playableSignature]); // eslint-disable-line react-hooks/exhaustive-deps

@@ -30,6 +30,8 @@ export interface Settings {
   musicEnabled: boolean;
   /** Play generated nearby sounds (tavern murmur, cave drips) under the music and ambience. */
   nearbySoundsEnabled: boolean;
+  /** The player's level for each nearby sound by id (1 = normal); sounds not listed play at 1. */
+  nearbyVolumes: Record<string, number>;
   // Display & gameplay
   diceAnimations: boolean;
   reduceMotion: boolean;
@@ -56,6 +58,7 @@ export const DEFAULT_SETTINGS: Settings = {
   volume: 0.6,
   musicEnabled: true,
   nearbySoundsEnabled: true,
+  nearbyVolumes: {},
   diceAnimations: true,
   reduceMotion: false,
 };

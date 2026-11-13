@@ -26,6 +26,8 @@ export interface NarratorVoice {
   natural?: boolean;
   recommended?: boolean;
   provider?: string;
+  /** Device voices only: how the voice sounds (see voiceQuality). */
+  quality?: VoiceQuality;
 }
 
 export interface NarratorConfig {
@@ -105,6 +107,33 @@ export function migrateDeviceVoiceId(id: string | null): string | null {
  */
 export function deviceIgnoresVoiceChoice(): boolean {
   return typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent ?? "");
+}
+
+/**
+ * How a browser voice sounds, judged from its name and address (browsers do not say):
+ * - "natural": neural or high-quality voices (Edge "Online (Natural)", Google, Apple enhanced/premium, phones).
+ * - "basic": older robotic voices (Windows desktop voices such as David and Zira, Apple compact, eSpeak).
+ * - "novelty": joke and character voices (Apple's Zarvox, Bubbles, Junior...), never offered.
+ */
+export type VoiceQuality = "natural" | "basic" | "novelty";
+
+const NOVELTY_VOICES = new Set([
+  "albert", "bad news", "bahh", "bells", "boing", "bubbles", "cellos", "deranged", "fred", "good news",
+  "hysterical", "jester", "junior", "kathy", "organ", "pipe organ", "princess", "ralph", "superstar",
+  "trinoids", "whisper", "wobble", "zarvox",
+]);
+
+export function voiceQuality(voice: Pick<SpeechSynthesisVoice, "name" | "voiceURI">): VoiceQuality {
+  const name = voice.name.toLowerCase();
+  const address = (voice.voiceURI ?? "").toLowerCase();
+  const baseName = name.replace(/\s*\(.*\)\s*$/, "").trim();
+  if (NOVELTY_VOICES.has(baseName)) return "novelty";
+  // Apple's old speech-synthesis voices are all robotic except Alex.
+  if (address.includes("com.apple.speech.synthesis.voice.") && !address.endsWith(".alex")) return "novelty";
+  if (/natural|neural|premium|enhanced|wavenet|studio|journey|siri/.test(name) || /premium|enhanced/.test(address)) return "natural";
+  if (/espeak|eloquence|compact/.test(`${name} ${address}`)) return "basic";
+  if (name.startsWith("microsoft ") && !name.includes("online")) return "basic";
+  return "natural";
 }
 
 function friendlyLabel(voice: SpeechSynthesisVoice): string {
@@ -229,15 +258,24 @@ export class Narrator {
     }
   }
 
+  /**
+   * The browser's voices worth offering: only natural-sounding ones when there are any, otherwise
+   * the basic ones (so the narrator still works). Novelty voices are never offered.
+   */
   deviceVoices(): NarratorVoice[] {
     if (!this.supported) return [];
-    return uniqueDeviceVoices().map((voice) => ({
+    const voices = uniqueDeviceVoices()
+      .map((voice) => ({ voice, quality: voiceQuality(voice) }))
+      .filter(({ quality }) => quality !== "novelty");
+    const best = voices.some(({ quality }) => quality === "natural") ? voices.filter(({ quality }) => quality === "natural") : voices;
+    return best.map(({ voice, quality }) => ({
       id: deviceVoiceKey(voice),
       label: friendlyLabel(voice),
       gender: classifyGender(voice.name),
       source: "device" as const,
       lang: voice.lang,
       natural: /natural|neural|premium|enhanced/i.test(voice.name),
+      quality,
     }));
   }
 

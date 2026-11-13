@@ -4,6 +4,7 @@ import type { NearbyLayerStatus, NearbySounds } from "../../hooks/useNearbySound
 import type { SceneMusic } from "../../hooks/useSceneMusic";
 import type { Settings, TextSize, TextSpeed } from "../../hooks/useSettings";
 import type { VoiceOptions } from "../../hooks/useVoices";
+import { MAX_NEARBY_VOLUME } from "../../lib/audio";
 import { deviceIgnoresVoiceChoice, narrator, pickVoice, type NarratorVoice } from "../../lib/narrator";
 
 const PREVIEW_LINE =
@@ -267,6 +268,17 @@ function NearbySoundControls({ settings, nearby, onChange }: { settings: Setting
                   Make again
                 </button>
               </div>
+              <div className="mt-2">
+                <Slider
+                  label={`${layer.label} volume`}
+                  value={settings.nearbyVolumes[layer.id] ?? 1}
+                  min={0}
+                  max={MAX_NEARBY_VOLUME}
+                  step={0.05}
+                  onChange={(level) => onChange({ nearbyVolumes: { ...settings.nearbyVolumes, [layer.id]: level } })}
+                  format={percent}
+                />
+              </div>
               {editing === layer.id && (
                 <div className="mt-2 flex flex-col gap-2 sm:flex-row">
                   <input
@@ -314,6 +326,8 @@ function NarratorSection({ settings, voices, onChange }: { settings: Settings; v
     return { visible: sorted, genderUnknown: unknown && sorted.length > 0 };
   }, [pool, cloud, englishOnly, filter]);
   const onlyOneDeviceVoice = !cloud && pool.length === 1;
+  // Robotic voices are hidden whenever natural ones exist; this browser has none.
+  const onlyBasicVoices = !cloud && pool.length > 0 && pool.every((v) => v.quality === "basic");
   const choiceMayBeIgnored = !cloud && pool.length > 1 && deviceIgnoresVoiceChoice();
 
   const select = (voice: NarratorVoice) => onChange(cloud ? { cloudVoiceId: voice.id } : { deviceVoiceId: voice.id });
@@ -385,6 +399,12 @@ function NarratorSection({ settings, voices, onChange }: { settings: Settings; v
             )}
           </div>
 
+          {onlyBasicVoices && (
+            <p className="mt-3 text-[0.75rem] leading-snug text-mist" role="note">
+              This browser offers only older, robotic-sounding voices. For natural ones, play in Microsoft Edge or Chrome, on a
+              phone, or in Safari after downloading an enhanced voice in the system settings.
+            </p>
+          )}
           {onlyOneDeviceVoice && (
             <p className="mt-3 text-[0.75rem] leading-snug text-mist" role="note">
               This browser offers only one voice, so there is nothing to choose between here. Other browsers or devices may offer more.

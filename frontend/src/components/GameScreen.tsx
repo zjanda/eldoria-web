@@ -133,7 +133,7 @@ export function GameScreen({
   // Composed music takes over from the synthesized ambience whenever a track for this moment is ready.
   const music = useSceneMusic(adventure, settings.audioEnabled && settings.musicEnabled);
   // Generated nearby sounds (tavern murmur, cave drips) play quietly under the music and ambience.
-  const nearby = useNearbySounds(adventure, settings.audioEnabled && settings.nearbySoundsEnabled);
+  const nearby = useNearbySounds(adventure, settings.audioEnabled && settings.nearbySoundsEnabled, settings.nearbyVolumes);
   useEffect(
     () => () => {
       audio.stopAmbience();
