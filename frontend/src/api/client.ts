@@ -84,5 +84,9 @@ export const api = {
   paintScene: (id: string, direction: string, reference: string | null) =>
     request<Adventure>(`/api/adventures/${id}/scene-art`, { method: "POST", body: JSON.stringify({ direction, reference }) }),
   image: (key: string) => request<ImageReference>(`/api/images/${key}`),
+  /** Compose the music for the current moment if it does not exist yet, or (newTrack) another piece for it. */
+  music: (id: string, newTrack: boolean, direction: string) =>
+    request<Adventure>(`/api/adventures/${id}/music`, { method: "POST", body: JSON.stringify({ new_track: newTrack, direction }) }),
+  musicStatus: (key: string) => request<ImageReference>(`/api/music/${key}`),
   voices: () => request<VoiceCatalog>("/api/voices"),
 };

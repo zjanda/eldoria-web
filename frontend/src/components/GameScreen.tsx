@@ -18,6 +18,7 @@ import { DEFAULT_RULES, DIFFICULTIES, RetellDialog, RulesPanel } from "./rules/R
 import { SidePanels } from "./panels/SidePanels";
 import { SceneView } from "./scene/SceneView";
 import { SettingsMenu } from "./settings/SettingsMenu";
+import { useSceneMusic } from "../hooks/useSceneMusic";
 
 type Phase = "idle" | "dice" | "reveal";
 type ChronicleView = "story" | "recaps" | "everything";
@@ -128,6 +129,8 @@ export function GameScreen({
   useEffect(() => {
     audio.playAmbience(inCombat ? "combat" : adventure.scene.ambient_sound);
   }, [inCombat, adventure.scene.ambient_sound]);
+  // Composed music takes over from the synthesized ambience whenever a track for this moment is ready.
+  const music = useSceneMusic(adventure, settings.audioEnabled && settings.musicEnabled);
   useEffect(
     () => () => {
       audio.stopAmbience();
@@ -329,7 +332,7 @@ export function GameScreen({
 
       <AnimatePresence>
         {settingsOpen && (
-          <SettingsMenu storyControl={adventure.story_control} richNarration={adventure.rich_narration} storyBusy={submitting} onStoryControl={(level) => void onStoryAction("control", level)} onRichNarration={(rich) => void onStoryAction("narration", rich)} key="settings" settings={settings} voices={voices} onChange={onSettingsChange} onReset={onResetSettings} onClose={() => setSettingsOpen(false)} />
+          <SettingsMenu storyControl={adventure.story_control} richNarration={adventure.rich_narration} storyBusy={submitting} onStoryControl={(level) => void onStoryAction("control", level)} onRichNarration={(rich) => void onStoryAction("narration", rich)} key="settings" settings={settings} voices={voices} music={music} onChange={onSettingsChange} onReset={onResetSettings} onClose={() => setSettingsOpen(false)} />
         )}
       </AnimatePresence>
 

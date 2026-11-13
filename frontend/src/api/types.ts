@@ -263,6 +263,10 @@ export interface SceneState {
   art_version: number;
   art_reference: string;
   art_previous: ArtSnapshot | null;
+  /** The generated track that fits this moment. Absent from older backends and when no generator is set up. */
+  music?: ImageReference | null;
+  music_direction?: string;
+  music_version?: number;
 }
 
 export interface QuestObjective {
@@ -456,6 +460,7 @@ export interface Adventure {
   suggested_actions: SuggestedAction[];
   technique_offers: TechniqueOffer[];
   images_enabled: boolean;
+  music_enabled?: boolean;
   chapter_complete: boolean;
   flags: string[];
   glossary: GlossaryEntry[];
@@ -506,4 +511,5 @@ export interface ProviderStatus {
   narrative_provider: string;
   image_provider: string;
   images_enabled: boolean;
+  music_enabled?: boolean;
 }

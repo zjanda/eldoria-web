@@ -1,5 +1,6 @@
 import { motion } from "framer-motion";
 import { useMemo, useState, type ReactNode } from "react";
+import type { SceneMusic } from "../../hooks/useSceneMusic";
 import type { Settings, TextSize, TextSpeed } from "../../hooks/useSettings";
 import type { VoiceOptions } from "../../hooks/useVoices";
 import { narrator, pickVoice, type NarratorVoice } from "../../lib/narrator";
@@ -15,12 +16,14 @@ interface SettingsMenuProps {
   onRichNarration: (rich: boolean) => void;
   settings: Settings;
   voices: VoiceOptions;
+  /** The generated music of the tale being played. */
+  music: SceneMusic;
   onChange: (patch: Partial<Settings>) => void;
   onReset: () => void;
   onClose: () => void;
 }
 
-export function SettingsMenu({ storyControl, richNarration, storyBusy, onStoryControl, onRichNarration, settings, voices, onChange, onReset, onClose }: SettingsMenuProps) {
+export function SettingsMenu({ storyControl, richNarration, storyBusy, onStoryControl, onRichNarration, settings, voices, music, onChange, onReset, onClose }: SettingsMenuProps) {
   return (
     <motion.div
       className="fixed inset-0 z-50 flex items-stretch justify-center bg-ink/80 backdrop-blur-sm sm:items-center sm:p-6"
@@ -96,7 +99,8 @@ export function SettingsMenu({ storyControl, richNarration, storyBusy, onStoryCo
 
           <Section title="Sound">
             <Toggle label="Ambient sound & effects" checked={settings.audioEnabled} onChange={(audioEnabled) => onChange({ audioEnabled })} />
-            <Slider label="Ambience volume" value={settings.volume} min={0} max={1} step={0.05} onChange={(volume) => onChange({ volume })} format={percent} />
+            <Slider label="Sound volume" value={settings.volume} min={0} max={1} step={0.05} onChange={(volume) => onChange({ volume })} format={percent} />
+            <MusicControls settings={settings} music={music} onChange={onChange} />
           </Section>
 
           <Section title="Display & gameplay">
@@ -120,6 +124,67 @@ export function SettingsMenu({ storyControl, richNarration, storyBusy, onStoryCo
         </footer>
       </motion.div>
     </motion.div>
+  );
+}
+
+const MUSIC_STATUS: Record<SceneMusic["status"], string> = {
+  unavailable: "The server has no music generator set up, so the ambient sound plays instead.",
+  off: "Music is off. The ambient sound plays instead.",
+  composing: "Composing a track for this place. The ambient sound plays until it is ready.",
+  playing: "Playing the track composed for this place.",
+  failed: "The last track could not be composed. The ambient sound plays instead; you can ask for another.",
+};
+
+/** Generated music: on or off, what it is doing, and a way to ask for a different piece. */
+function MusicControls({ settings, music, onChange }: { settings: Settings; music: SceneMusic; onChange: (patch: Partial<Settings>) => void }) {
+  const [direction, setDirection] = useState(music.direction);
+  const [asking, setAsking] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const available = music.status !== "unavailable";
+  const usable = available && settings.audioEnabled && settings.musicEnabled;
+
+  const compose = async () => {
+    if (asking) return;
+    setAsking(true);
+    setProblem(null);
+    try {
+      await music.composeAnother(direction.trim());
+    } catch (error) {
+      setProblem(error instanceof Error ? error.message : "The new track could not be requested.");
+    } finally {
+      setAsking(false);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <Toggle
+        label="Music composed for each place"
+        hint="Each place and each fight gets its own piece, written by the music generator on your server and reused when you return."
+        checked={settings.musicEnabled && available}
+        onChange={(musicEnabled) => available && onChange({ musicEnabled })}
+      />
+      <p className="text-[0.75rem] leading-snug text-mist" role="status">
+        {settings.audioEnabled || !available ? MUSIC_STATUS[music.status] : "Sound is switched off above, so no music plays."}
+      </p>
+      {usable && (
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <input
+            className="input min-w-0 flex-1"
+            value={direction}
+            maxLength={300}
+            placeholder="Optional: what you want to hear (slower, more harp, no drums)"
+            aria-label="Describe the music you want"
+            onChange={(event) => setDirection(event.target.value)}
+            onKeyDown={(event) => event.key === "Enter" && void compose()}
+          />
+          <button className="btn-ghost shrink-0" disabled={asking} onClick={() => void compose()}>
+            {asking ? "Asking…" : "Compose another"}
+          </button>
+        </div>
+      )}
+      {problem && <p className="text-[0.75rem] text-ember" role="alert">{problem}</p>}
+    </div>
   );
 }
 

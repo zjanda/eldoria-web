@@ -26,6 +26,8 @@ export interface Settings {
   // Sound
   audioEnabled: boolean;
   volume: number;
+  /** Play music composed for each place, where the server has a music generator. */
+  musicEnabled: boolean;
   // Display & gameplay
   diceAnimations: boolean;
   reduceMotion: boolean;
@@ -50,6 +52,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showTurnRecap: true,
   audioEnabled: true,
   volume: 0.6,
+  musicEnabled: true,
   diceAnimations: true,
   reduceMotion: false,
 };

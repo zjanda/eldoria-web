@@ -7,6 +7,8 @@
  * each other: low, beating tones are what make a drone sound like an engine.
  */
 
+import { remoteBackend } from "../api/connection";
+
 interface AmbiencePreset {
   /** Pad chord in Hz, lowest first. */
   chord: number[];
@@ -57,6 +59,51 @@ const PRESETS: Record<string, AmbiencePreset> = {
 
 const between = (low: number, high: number) => low + Math.random() * (high - low);
 
+// Equal-power fades, so two overlapping passes of a track keep a steady loudness.
+const FADE_STEPS = 64;
+const FADE_IN = Float32Array.from({ length: FADE_STEPS }, (_, i) => Math.sin((i / (FADE_STEPS - 1)) * (Math.PI / 2)));
+const FADE_OUT = Float32Array.from({ length: FADE_STEPS }, (_, i) => Math.cos((i / (FADE_STEPS - 1)) * (Math.PI / 2)));
+
+/** Loudness composed music is brought to, so it sits behind the story like the ambience does. */
+const MUSIC_TARGET_RMS = 0.045;
+const SILENCE_RMS = 0.006;
+
+/**
+ * The part of a track that actually sounds (generated tracks often open and close with silence),
+ * and the gain that brings it to the background level.
+ */
+export function soundingRegion(buffer: AudioBuffer): { start: number; length: number; level: number } {
+  const samples = buffer.getChannelData(0);
+  const window = Math.max(1, Math.floor(buffer.sampleRate * 0.05));
+  const loudness = (from: number) => {
+    let sum = 0;
+    const to = Math.min(samples.length, from + window);
+    for (let i = from; i < to; i += 4) sum += samples[i] * samples[i];
+    return Math.sqrt(sum / Math.max(1, (to - from) / 4));
+  };
+  let first = 0;
+  while (first + window < samples.length && loudness(first) < SILENCE_RMS) first += window;
+  let last = samples.length;
+  while (last - window > first && loudness(last - window) < SILENCE_RMS) last -= window;
+  // Too little left to loop: play the whole thing rather than a fragment.
+  if ((last - first) / buffer.sampleRate < 10) {
+    first = 0;
+    last = samples.length;
+  }
+  let sum = 0;
+  let count = 0;
+  for (let i = first; i < last; i += 16) {
+    sum += samples[i] * samples[i];
+    count += 1;
+  }
+  const rms = Math.sqrt(sum / Math.max(1, count));
+  return {
+    start: first / buffer.sampleRate,
+    length: (last - first) / buffer.sampleRate,
+    level: Math.min(1, MUSIC_TARGET_RMS / Math.max(rms, 0.005)),
+  };
+}
+
 class AudioEngine {
   private context: AudioContext | null = null;
   private master: GainNode | null = null;
@@ -84,8 +131,17 @@ class AudioEngine {
 
   setEnabled(enabled: boolean) {
     this.enabled = enabled;
-    if (!enabled) this.stopAmbience();
-    else if (this.currentKey) this.playAmbience(this.currentKey, true);
+    if (!enabled) {
+      this.stopAmbience();
+      this.fadeOutMusic();
+      return;
+    }
+    const track = this.wantedMusic;
+    if (track && !this.music) {
+      this.wantedMusic = null;
+      void this.playMusic(track);
+    }
+    if (this.currentKey) this.playAmbience(this.currentKey, true);
   }
 
   private ducked = false;
@@ -179,10 +235,100 @@ class AudioEngine {
     this.activeTimers = [];
   }
 
+  // ---------------------------------------------------------------- composed music
+
+  private music: { url: string; bus: GainNode; sources: AudioBufferSourceNode[]; timers: number[] } | null = null;
+  /** The track that should be playing, whether or not it has loaded yet. */
+  private wantedMusic: string | null = null;
+
+  /**
+   * Loop a composed track in place of the synthesized ambience. The track's silent lead-in and
+   * tail are skipped, and each pass fades into the next so the loop point is not heard.
+   * If the track cannot be loaded the ambience simply keeps playing.
+   */
+  async playMusic(url: string) {
+    if (this.wantedMusic === url) return;
+    this.wantedMusic = url;
+    if (!this.enabled) return;
+    const context = this.ensureContext();
+    if (!context || !this.master) return;
+    let buffer: AudioBuffer;
+    try {
+      const response = await fetch(url, { credentials: remoteBackend ? "include" : "same-origin" });
+      if (!response.ok) throw new Error(`music ${response.status}`);
+      buffer = await context.decodeAudioData(await response.arrayBuffer());
+    } catch {
+      if (this.wantedMusic === url) this.wantedMusic = null; // a later request may try again
+      return;
+    }
+    if (this.wantedMusic !== url || !this.enabled || !this.master) return;
+    this.fadeOutMusic();
+    this.stopAmbience();
+
+    const { start, length, level } = soundingRegion(buffer);
+    const overlap = Math.min(6, Math.max(2, length * 0.12));
+    const period = length - overlap;
+    const bus = context.createGain();
+    bus.gain.value = level;
+    bus.connect(this.master);
+    const playing = { url, bus, sources: [] as AudioBufferSourceNode[], timers: [] as number[] };
+    this.music = playing;
+
+    const pass = (at: number, fadeIn: number) => {
+      if (this.music !== playing) return;
+      const source = context.createBufferSource();
+      source.buffer = buffer;
+      const gain = context.createGain();
+      gain.gain.value = 0;
+      gain.gain.setValueCurveAtTime(FADE_IN, at, fadeIn);
+      gain.gain.setValueCurveAtTime(FADE_OUT, at + length - overlap, overlap);
+      source.connect(gain).connect(bus);
+      source.start(at, start, length);
+      source.stop(at + length + 0.1);
+      playing.sources.push(source);
+      source.onended = () => {
+        gain.disconnect();
+        playing.sources = playing.sources.filter((other) => other !== source);
+      };
+      // Line up the next pass well ahead of time: timers in a background tab can run very late.
+      const wait = Math.max(0, at - context.currentTime) + period * 0.25;
+      playing.timers.push(window.setTimeout(() => pass(at + period, overlap), wait * 1000));
+    };
+    pass(context.currentTime + 0.05, Math.min(3, overlap));
+  }
+
+  /** Stop the composed music and let the ambience return. */
+  stopMusic() {
+    this.wantedMusic = null;
+    if (!this.music) return;
+    this.fadeOutMusic();
+    if (this.enabled && this.currentKey) this.playAmbience(this.currentKey, true);
+  }
+
+  private fadeOutMusic() {
+    const playing = this.music;
+    const context = this.context;
+    this.music = null;
+    if (!playing || !context) return;
+    playing.timers.forEach((timer) => window.clearTimeout(timer));
+    playing.bus.gain.setTargetAtTime(0, context.currentTime, 0.8);
+    for (const source of playing.sources) {
+      try {
+        source.stop(context.currentTime + 4);
+      } catch {
+        /* already stopped */
+      }
+    }
+    window.setTimeout(() => playing.bus.disconnect(), 4500);
+  }
+
+  // ---------------------------------------------------------------- synthesized ambience
+
   playAmbience(key: string, force = false) {
     if (!force && key === this.currentKey && this.activeNodes.length) return;
     this.currentKey = key;
     if (!this.enabled) return;
+    if (this.music) return; // composed music is playing; the ambience returns when it stops
     const context = this.ensureContext();
     if (!context || !this.master) return;
     this.stopAmbience();
