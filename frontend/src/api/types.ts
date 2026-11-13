@@ -267,6 +267,21 @@ export interface SceneState {
   music?: ImageReference | null;
   music_direction?: string;
   music_version?: number;
+  /** Nearby sounds for this scene (tavern murmur, cave drips...). Absent when no sound generator is set up. */
+  sounds?: SoundLayer[] | null;
+}
+
+/** A nearby sound and its generated takes; any ready take may be played. */
+export interface SoundLayer {
+  id: string;
+  label: string;
+  kind: "loop" | "oneshot";
+  takes: ImageReference[];
+  /** The take must contain short sharp sounds (drips, wing flaps) to pass the quality check. */
+  detailed: boolean;
+  composed: boolean;
+  /** The player's words for their own version of this sound, if any. */
+  direction: string;
 }
 
 export interface QuestObjective {
@@ -461,6 +476,7 @@ export interface Adventure {
   technique_offers: TechniqueOffer[];
   images_enabled: boolean;
   music_enabled?: boolean;
+  sounds_enabled?: boolean;
   chapter_complete: boolean;
   flags: string[];
   glossary: GlossaryEntry[];
@@ -512,4 +528,5 @@ export interface ProviderStatus {
   image_provider: string;
   images_enabled: boolean;
   music_enabled?: boolean;
+  sounds_enabled?: boolean;
 }

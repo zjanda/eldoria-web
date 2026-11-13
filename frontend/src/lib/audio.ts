@@ -66,13 +66,18 @@ const FADE_OUT = Float32Array.from({ length: FADE_STEPS }, (_, i) => Math.cos((i
 
 /** Loudness composed music is brought to, so it sits behind the story like the ambience does. */
 const MUSIC_TARGET_RMS = 0.045;
+/** Nearby sounds sit quietly under the music. */
+const NEARBY_TARGET_RMS = 0.018;
 const SILENCE_RMS = 0.006;
 
 /**
  * The part of a track that actually sounds (generated tracks often open and close with silence),
  * and the gain that brings it to the background level.
  */
-export function soundingRegion(buffer: AudioBuffer): { start: number; length: number; level: number } {
+export function soundingRegion(
+  buffer: AudioBuffer,
+  { target = MUSIC_TARGET_RMS, minSeconds = 10 }: { target?: number; minSeconds?: number } = {},
+): { start: number; length: number; level: number } {
   const samples = buffer.getChannelData(0);
   const window = Math.max(1, Math.floor(buffer.sampleRate * 0.05));
   const loudness = (from: number) => {
@@ -86,7 +91,7 @@ export function soundingRegion(buffer: AudioBuffer): { start: number; length: nu
   let last = samples.length;
   while (last - window > first && loudness(last - window) < SILENCE_RMS) last -= window;
   // Too little left to loop: play the whole thing rather than a fragment.
-  if ((last - first) / buffer.sampleRate < 10) {
+  if ((last - first) / buffer.sampleRate < minSeconds) {
     first = 0;
     last = samples.length;
   }
@@ -100,8 +105,89 @@ export function soundingRegion(buffer: AudioBuffer): { start: number; length: nu
   return {
     start: first / buffer.sampleRate,
     length: (last - first) / buffer.sampleRate,
-    level: Math.min(1, MUSIC_TARGET_RMS / Math.max(rms, 0.005)),
+    level: Math.min(1, target / Math.max(rms, 0.005)),
   };
+}
+
+interface Loop {
+  bus: GainNode;
+  sources: AudioBufferSourceNode[];
+  timers: number[];
+  stopped: boolean;
+}
+
+/**
+ * Loop one or more takes into `destination`, each pass fading into the next so the loop point is
+ * not heard. With several takes, passes alternate between them. Each take's silent lead-in and
+ * tail are skipped and its loudness is brought to `target`.
+ */
+function startLoop(context: AudioContext, destination: AudioNode, takes: AudioBuffer[], target: number): Loop {
+  const regions = takes.map((take) => soundingRegion(take, { target }));
+  const bus = context.createGain();
+  bus.connect(destination);
+  const loop: Loop = { bus, sources: [], timers: [], stopped: false };
+  let index = 0;
+  const pass = (at: number, fadeIn: number) => {
+    if (loop.stopped) return;
+    const which = index % takes.length;
+    index += 1;
+    const { start, length, level } = regions[which];
+    const overlap = Math.min(6, Math.max(2, length * 0.12));
+    const source = context.createBufferSource();
+    source.buffer = takes[which];
+    const loudness = context.createGain();
+    loudness.gain.value = level;
+    const fade = context.createGain();
+    fade.gain.value = 0;
+    fade.gain.setValueCurveAtTime(FADE_IN, at, fadeIn);
+    fade.gain.setValueCurveAtTime(FADE_OUT, at + length - overlap, overlap);
+    source.connect(loudness).connect(fade).connect(bus);
+    source.start(at, start, length);
+    source.stop(at + length + 0.1);
+    loop.sources.push(source);
+    source.onended = () => {
+      loudness.disconnect();
+      fade.disconnect();
+      loop.sources = loop.sources.filter((other) => other !== source);
+    };
+    // Line up the next pass well ahead of time: timers in a background tab can run very late.
+    const period = length - overlap;
+    const wait = Math.max(0, at - context.currentTime) + period * 0.25;
+    loop.timers.push(window.setTimeout(() => pass(at + period, overlap), wait * 1000));
+  };
+  pass(context.currentTime + 0.05, Math.min(3, Math.max(2, regions[0].length * 0.12)));
+  return loop;
+}
+
+/** Fade a loop out over a few seconds and release it. */
+function stopLoop(context: AudioContext, loop: Loop) {
+  loop.stopped = true;
+  loop.timers.forEach((timer) => window.clearTimeout(timer));
+  loop.bus.gain.setTargetAtTime(0, context.currentTime, 0.8);
+  for (const source of loop.sources) {
+    try {
+      source.stop(context.currentTime + 4);
+    } catch {
+      /* already stopped */
+    }
+  }
+  window.setTimeout(() => loop.bus.disconnect(), 4500);
+}
+
+/** A nearby sound to play: loops repeat, one-offs are heard now and then. */
+export interface NearbyLayer {
+  id: string;
+  kind: "loop" | "oneshot";
+  /** Decoded takes, used interchangeably. */
+  takes: AudioBuffer[];
+  /** Identifies the takes, so the same layer is not restarted when nothing changed. */
+  signature: string;
+}
+
+interface NearbyPlaying {
+  signature: string;
+  loop: Loop | null;
+  timer: number | undefined;
 }
 
 class AudioEngine {
@@ -134,8 +220,10 @@ class AudioEngine {
     if (!enabled) {
       this.stopAmbience();
       this.fadeOutMusic();
+      this.stopAllNearby();
       return;
     }
+    if (this.wantedNearby.length) this.setNearby(this.wantedNearby);
     const track = this.wantedMusic;
     if (track && !this.music) {
       this.wantedMusic = null;
@@ -237,7 +325,7 @@ class AudioEngine {
 
   // ---------------------------------------------------------------- composed music
 
-  private music: { url: string; bus: GainNode; sources: AudioBufferSourceNode[]; timers: number[] } | null = null;
+  private music: (Loop & { url: string }) | null = null;
   /** The track that should be playing, whether or not it has loaded yet. */
   private wantedMusic: string | null = null;
 
@@ -264,37 +352,7 @@ class AudioEngine {
     if (this.wantedMusic !== url || !this.enabled || !this.master) return;
     this.fadeOutMusic();
     this.stopAmbience();
-
-    const { start, length, level } = soundingRegion(buffer);
-    const overlap = Math.min(6, Math.max(2, length * 0.12));
-    const period = length - overlap;
-    const bus = context.createGain();
-    bus.gain.value = level;
-    bus.connect(this.master);
-    const playing = { url, bus, sources: [] as AudioBufferSourceNode[], timers: [] as number[] };
-    this.music = playing;
-
-    const pass = (at: number, fadeIn: number) => {
-      if (this.music !== playing) return;
-      const source = context.createBufferSource();
-      source.buffer = buffer;
-      const gain = context.createGain();
-      gain.gain.value = 0;
-      gain.gain.setValueCurveAtTime(FADE_IN, at, fadeIn);
-      gain.gain.setValueCurveAtTime(FADE_OUT, at + length - overlap, overlap);
-      source.connect(gain).connect(bus);
-      source.start(at, start, length);
-      source.stop(at + length + 0.1);
-      playing.sources.push(source);
-      source.onended = () => {
-        gain.disconnect();
-        playing.sources = playing.sources.filter((other) => other !== source);
-      };
-      // Line up the next pass well ahead of time: timers in a background tab can run very late.
-      const wait = Math.max(0, at - context.currentTime) + period * 0.25;
-      playing.timers.push(window.setTimeout(() => pass(at + period, overlap), wait * 1000));
-    };
-    pass(context.currentTime + 0.05, Math.min(3, overlap));
+    this.music = Object.assign(startLoop(context, this.master, [buffer], MUSIC_TARGET_RMS), { url });
   }
 
   /** Stop the composed music and let the ambience return. */
@@ -307,19 +365,100 @@ class AudioEngine {
 
   private fadeOutMusic() {
     const playing = this.music;
-    const context = this.context;
     this.music = null;
-    if (!playing || !context) return;
-    playing.timers.forEach((timer) => window.clearTimeout(timer));
-    playing.bus.gain.setTargetAtTime(0, context.currentTime, 0.8);
-    for (const source of playing.sources) {
-      try {
-        source.stop(context.currentTime + 4);
-      } catch {
-        /* already stopped */
-      }
+    if (playing && this.context) stopLoop(this.context, playing);
+  }
+
+  // ---------------------------------------------------------------- nearby sounds
+
+  private decoded = new Map<string, Promise<AudioBuffer | null>>();
+  private nearby = new Map<string, NearbyPlaying>();
+  private wantedNearby: NearbyLayer[] = [];
+
+  /** Fetch and decode a generated sound once; later calls share the result. Null if it cannot load. */
+  loadSound(url: string): Promise<AudioBuffer | null> {
+    const cached = this.decoded.get(url);
+    if (cached) return cached;
+    const context = this.ensureContext();
+    if (!context) return Promise.resolve(null);
+    const loading = fetch(url, { credentials: remoteBackend ? "include" : "same-origin" })
+      .then((response) => {
+        if (!response.ok) throw new Error(`sound ${response.status}`);
+        return response.arrayBuffer();
+      })
+      .then((data) => context.decodeAudioData(data))
+      .catch(() => {
+        this.decoded.delete(url); // a later request may try again
+        return null;
+      });
+    this.decoded.set(url, loading);
+    return loading;
+  }
+
+  /**
+   * Play these nearby sounds quietly under the music and ambience, replacing the previous set.
+   * Layers already playing with the same takes carry on undisturbed.
+   */
+  setNearby(layers: NearbyLayer[]) {
+    this.wantedNearby = layers;
+    if (!this.enabled) return;
+    const context = this.ensureContext();
+    if (!context || !this.master) return;
+    const wanted = new Map(layers.filter((layer) => layer.takes.length).map((layer) => [layer.id, layer]));
+    for (const [id, playing] of this.nearby) {
+      if (wanted.get(id)?.signature !== playing.signature) this.stopNearbyLayer(id);
     }
-    window.setTimeout(() => playing.bus.disconnect(), 4500);
+    for (const layer of wanted.values()) {
+      if (this.nearby.has(layer.id)) continue;
+      const playing: NearbyPlaying = { signature: layer.signature, loop: null, timer: undefined };
+      this.nearby.set(layer.id, playing);
+      if (layer.kind === "loop") playing.loop = startLoop(context, this.master, layer.takes, NEARBY_TARGET_RMS);
+      else this.scheduleOneShot(layer, playing, between(6, 20));
+    }
+  }
+
+  /** What is playing now, for checks and the settings screen: layer id to its kind and takes. */
+  nearbyPlaying(): { id: string; signature: string; looping: boolean }[] {
+    return [...this.nearby.entries()].map(([id, playing]) => ({ id, signature: playing.signature, looping: playing.loop !== null }));
+  }
+
+  /** A one-off sound (an owl, bats) now and then, from a random side. */
+  private scheduleOneShot(layer: NearbyLayer, playing: NearbyPlaying, afterSeconds: number) {
+    playing.timer = window.setTimeout(() => {
+      const context = this.context;
+      if (this.nearby.get(layer.id) !== playing || !context || !this.master || !this.enabled) return;
+      const take = layer.takes[Math.floor(Math.random() * layer.takes.length)];
+      const { start, length, level } = soundingRegion(take, { target: NEARBY_TARGET_RMS * 1.2, minSeconds: 0 });
+      const duration = Math.min(length, 12);
+      const now = context.currentTime + 0.05;
+      const source = context.createBufferSource();
+      source.buffer = take;
+      const gain = context.createGain();
+      gain.gain.value = 0;
+      gain.gain.setTargetAtTime(level, now, 0.15);
+      gain.gain.setTargetAtTime(0, now + Math.max(0.2, duration - 0.8), 0.25);
+      const pan = context.createStereoPanner();
+      pan.pan.value = between(-0.7, 0.7);
+      source.connect(gain).connect(pan).connect(this.master);
+      source.start(now, start, duration);
+      source.onended = () => {
+        gain.disconnect();
+        pan.disconnect();
+      };
+      this.scheduleOneShot(layer, playing, duration + between(20, 60));
+    }, afterSeconds * 1000);
+  }
+
+  private stopNearbyLayer(id: string) {
+    const playing = this.nearby.get(id);
+    this.nearby.delete(id);
+    if (!playing) return;
+    window.clearTimeout(playing.timer);
+    if (playing.loop && this.context) stopLoop(this.context, playing.loop);
+  }
+
+  private stopAllNearby() {
+    for (const id of [...this.nearby.keys()]) this.stopNearbyLayer(id);
   }
 
   // ---------------------------------------------------------------- synthesized ambience

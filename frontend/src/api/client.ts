@@ -88,5 +88,12 @@ export const api = {
   music: (id: string, newTrack: boolean, direction: string) =>
     request<Adventure>(`/api/adventures/${id}/music`, { method: "POST", body: JSON.stringify({ new_track: newTrack, direction }) }),
   musicStatus: (key: string) => request<ImageReference>(`/api/music/${key}`),
+  /** Generate the scene's nearby sounds that do not exist yet, or (layerId) the player's own version of one. */
+  sounds: (id: string, layerId = "", direction = "") =>
+    request<Adventure>(`/api/adventures/${id}/sounds`, { method: "POST", body: JSON.stringify({ layer_id: layerId, direction }) }),
+  soundStatus: (key: string) => request<ImageReference>(`/api/sounds/${key}`),
+  /** Report a take that failed the quality check; the server tries a new seed (a few times at most). */
+  soundRetake: (key: string, url: string) =>
+    request<ImageReference>(`/api/sounds/${key}/retake`, { method: "POST", body: JSON.stringify({ url }) }),
   voices: () => request<VoiceCatalog>("/api/voices"),
 };

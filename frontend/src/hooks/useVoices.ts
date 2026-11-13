@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
-import { narrator, pickVoice, type NarratorVoice } from "../lib/narrator";
+import { migrateDeviceVoiceId, narrator, pickVoice, type NarratorVoice } from "../lib/narrator";
 import type { Settings } from "./useSettings";
 
 export interface VoiceOptions {
@@ -40,6 +40,9 @@ export function useVoices(settings: Settings, update: (patch: Partial<Settings>)
   useEffect(() => {
     if (!deviceVoices.length) return;
     if (!settings.deviceVoiceId || !deviceVoices.some((v) => v.id === settings.deviceVoiceId)) {
+      // A choice saved by an older version (a bare voiceURI) keeps its voice under the new id form.
+      const migrated = migrateDeviceVoiceId(settings.deviceVoiceId);
+      if (migrated) return update({ deviceVoiceId: migrated });
       const pick = pickVoice(deviceVoices, settings.voiceGender);
       if (pick) update({ deviceVoiceId: pick.id });
     }

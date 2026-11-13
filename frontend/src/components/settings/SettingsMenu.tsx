@@ -1,9 +1,10 @@
 import { motion } from "framer-motion";
 import { useMemo, useState, type ReactNode } from "react";
+import type { NearbyLayerStatus, NearbySounds } from "../../hooks/useNearbySounds";
 import type { SceneMusic } from "../../hooks/useSceneMusic";
 import type { Settings, TextSize, TextSpeed } from "../../hooks/useSettings";
 import type { VoiceOptions } from "../../hooks/useVoices";
-import { narrator, pickVoice, type NarratorVoice } from "../../lib/narrator";
+import { deviceIgnoresVoiceChoice, narrator, pickVoice, type NarratorVoice } from "../../lib/narrator";
 
 const PREVIEW_LINE =
   "Beneath the Hollow Oak, something ancient stirs. Choose your path wisely, travellers — the darkness is listening.";
@@ -18,12 +19,14 @@ interface SettingsMenuProps {
   voices: VoiceOptions;
   /** The generated music of the tale being played. */
   music: SceneMusic;
+  /** The generated nearby sounds of the current scene. */
+  nearby: NearbySounds;
   onChange: (patch: Partial<Settings>) => void;
   onReset: () => void;
   onClose: () => void;
 }
 
-export function SettingsMenu({ storyControl, richNarration, storyBusy, onStoryControl, onRichNarration, settings, voices, music, onChange, onReset, onClose }: SettingsMenuProps) {
+export function SettingsMenu({ storyControl, richNarration, storyBusy, onStoryControl, onRichNarration, settings, voices, music, nearby, onChange, onReset, onClose }: SettingsMenuProps) {
   return (
     <motion.div
       className="fixed inset-0 z-50 flex items-stretch justify-center bg-ink/80 backdrop-blur-sm sm:items-center sm:p-6"
@@ -101,6 +104,7 @@ export function SettingsMenu({ storyControl, richNarration, storyBusy, onStoryCo
             <Toggle label="Ambient sound & effects" checked={settings.audioEnabled} onChange={(audioEnabled) => onChange({ audioEnabled })} />
             <Slider label="Sound volume" value={settings.volume} min={0} max={1} step={0.05} onChange={(volume) => onChange({ volume })} format={percent} />
             <MusicControls settings={settings} music={music} onChange={onChange} />
+            <NearbySoundControls settings={settings} nearby={nearby} onChange={onChange} />
           </Section>
 
           <Section title="Display & gameplay">
@@ -188,6 +192,107 @@ function MusicControls({ settings, music, onChange }: { settings: Settings; musi
   );
 }
 
+const NEARBY_LAYER_STATUS: Record<NearbyLayerStatus, string> = {
+  making: "being made…",
+  checking: "checking…",
+  playing: "playing",
+  failed: "could not be made",
+};
+
+/** Nearby sounds: on or off, which sounds this scene has, and a way to have one made again. */
+function NearbySoundControls({ settings, nearby, onChange }: { settings: Settings; nearby: NearbySounds; onChange: (patch: Partial<Settings>) => void }) {
+  const available = nearby.status !== "unavailable";
+  const usable = available && settings.audioEnabled && settings.nearbySoundsEnabled;
+  const [editing, setEditing] = useState<string | null>(null);
+  const [direction, setDirection] = useState("");
+  const [asking, setAsking] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+
+  const open = (layerId: string, current: string) => {
+    setEditing(editing === layerId ? null : layerId);
+    setDirection(current);
+    setProblem(null);
+  };
+
+  const makeAgain = async (layerId: string) => {
+    if (asking) return;
+    setAsking(true);
+    setProblem(null);
+    try {
+      await nearby.makeAgain(layerId, direction.trim());
+      setEditing(null);
+    } catch (error) {
+      setProblem(error instanceof Error ? error.message : "The sound could not be requested.");
+    } finally {
+      setAsking(false);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <Toggle
+        label="Nearby sounds"
+        hint="Sounds of the place itself, like voices in a tavern or dripping water in a cave, made by the sound generator on your server and reused everywhere they fit."
+        checked={settings.nearbySoundsEnabled && available}
+        onChange={(nearbySoundsEnabled) => available && onChange({ nearbySoundsEnabled })}
+      />
+      <p className="text-[0.75rem] leading-snug text-mist" role="status">
+        {!available
+          ? "The server has no sound generator set up."
+          : !settings.audioEnabled
+            ? "Sound is switched off above, so no nearby sounds play."
+            : !settings.nearbySoundsEnabled
+              ? "Nearby sounds are off."
+              : nearby.layers.length === 0
+                ? "This place has no nearby sounds."
+                : "Sounds of this place:"}
+      </p>
+      {usable && nearby.layers.length > 0 && (
+        <ul className="space-y-1.5" aria-label="Nearby sounds of this place">
+          {nearby.layers.map((layer) => (
+            <li key={layer.id} className="rounded-lg border border-white/5 bg-ink/40 px-3 py-2">
+              <div className="flex items-center justify-between gap-3">
+                <span className="min-w-0">
+                  <span className="block truncate text-sm text-parchment">{layer.label}</span>
+                  <span className="block text-[0.68rem] text-mist">
+                    {NEARBY_LAYER_STATUS[layer.status]}
+                    {layer.direction ? ` · your version: “${layer.direction}”` : ""}
+                  </span>
+                </span>
+                <button
+                  className="btn-ghost shrink-0 !px-2.5 !py-1 text-xs"
+                  aria-expanded={editing === layer.id}
+                  onClick={() => open(layer.id, layer.direction)}
+                >
+                  Make again
+                </button>
+              </div>
+              {editing === layer.id && (
+                <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+                  <input
+                    className="input min-w-0 flex-1"
+                    value={direction}
+                    maxLength={200}
+                    autoFocus
+                    placeholder="Optional: what you want to hear (slower drips, more echo)"
+                    aria-label={`Describe the ${layer.label.toLowerCase()} you want`}
+                    onChange={(event) => setDirection(event.target.value)}
+                    onKeyDown={(event) => event.key === "Enter" && void makeAgain(layer.id)}
+                  />
+                  <button className="btn-ghost shrink-0" disabled={asking} onClick={() => void makeAgain(layer.id)}>
+                    {asking ? "Asking…" : "Make it"}
+                  </button>
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {problem && <p className="text-[0.75rem] text-ember" role="alert">{problem}</p>}
+    </div>
+  );
+}
+
 function NarratorSection({ settings, voices, onChange }: { settings: Settings; voices: VoiceOptions; onChange: (patch: Partial<Settings>) => void }) {
   const [filter, setFilter] = useState<"female" | "male" | "all">(settings.voiceGender);
   const [englishOnly, setEnglishOnly] = useState(true);
@@ -195,12 +300,21 @@ function NarratorSection({ settings, voices, onChange }: { settings: Settings; v
   const pool = cloud ? voices.cloudVoices : voices.deviceVoices;
   const selectedId = cloud ? settings.cloudVoiceId : settings.deviceVoiceId;
 
-  const visible = useMemo(() => {
+  const { visible, genderUnknown } = useMemo(() => {
     let list = pool;
     if (!cloud && englishOnly) list = list.filter((v) => v.lang.toLowerCase().startsWith("en"));
-    if (filter !== "all") list = list.filter((v) => v.gender === filter);
-    return [...list].sort((a, b) => Number(!!b.natural) - Number(!!a.natural) || a.label.localeCompare(b.label));
+    let unknown = false;
+    if (filter !== "all") {
+      const matching = list.filter((v) => v.gender === filter);
+      // Many phone voices have names that do not reveal a gender; show those rather than nothing.
+      unknown = matching.length === 0;
+      list = unknown ? list.filter((v) => v.gender === "unknown" || v.gender === "neutral") : matching;
+    }
+    const sorted = [...list].sort((a, b) => Number(!!b.natural) - Number(!!a.natural) || a.label.localeCompare(b.label));
+    return { visible: sorted, genderUnknown: unknown && sorted.length > 0 };
   }, [pool, cloud, englishOnly, filter]);
+  const onlyOneDeviceVoice = !cloud && pool.length === 1;
+  const choiceMayBeIgnored = !cloud && pool.length > 1 && deviceIgnoresVoiceChoice();
 
   const select = (voice: NarratorVoice) => onChange(cloud ? { cloudVoiceId: voice.id } : { deviceVoiceId: voice.id });
 
@@ -271,6 +385,22 @@ function NarratorSection({ settings, voices, onChange }: { settings: Settings; v
             )}
           </div>
 
+          {onlyOneDeviceVoice && (
+            <p className="mt-3 text-[0.75rem] leading-snug text-mist" role="note">
+              This browser offers only one voice, so there is nothing to choose between here. Other browsers or devices may offer more.
+            </p>
+          )}
+          {choiceMayBeIgnored && (
+            <p className="mt-3 text-[0.75rem] leading-snug text-mist" role="note">
+              On Android, the browser often reads with the phone&apos;s own voice whatever you pick below, so several choices can sound
+              the same. To change it, use the text-to-speech settings in Android&apos;s Settings app.
+            </p>
+          )}
+          {genderUnknown && (
+            <p className="mt-3 text-[0.75rem] leading-snug text-mist" role="note">
+              This device does not say which of its voices are female or male, so all of them are shown.
+            </p>
+          )}
           <ul className="mt-3 max-h-64 space-y-1.5 overflow-y-auto pr-1" role="radiogroup" aria-label="Narrator voice">
             {visible.length === 0 && (
               <li className="rounded border border-white/5 bg-ink/40 px-3 py-3 text-sm text-mist">
@@ -311,7 +441,15 @@ function NarratorSection({ settings, voices, onChange }: { settings: Settings; v
 
         <Slider label="Speaking speed" value={settings.narratorRate} min={0.7} max={1.3} step={0.05} onChange={(narratorRate) => onChange({ narratorRate })} format={(v) => `${v.toFixed(2)}×`} />
         {!cloud && (
-          <Slider label="Pitch" value={settings.narratorPitch} min={0.6} max={1.4} step={0.05} onChange={(narratorPitch) => onChange({ narratorPitch })} format={(v) => v.toFixed(2)} />
+          <>
+            <Slider label="Pitch" value={settings.narratorPitch} min={0.6} max={1.4} step={0.05} onChange={(narratorPitch) => onChange({ narratorPitch })} format={(v) => v.toFixed(2)} />
+            {Math.abs(settings.narratorPitch - 1) >= 0.15 && (
+              <p className="-mt-2 text-[0.72rem] leading-snug text-mist">
+                A pitch far from 1.00 changes every voice: high values can make an adult voice sound like a child.{" "}
+                <button className="text-gold-soft underline" onClick={() => onChange({ narratorPitch: 1 })}>Reset to 1.00</button>
+              </p>
+            )}
+          </>
         )}
         <Slider label="Narrator volume" value={settings.narratorVolume} min={0} max={1} step={0.05} onChange={(narratorVolume) => onChange({ narratorVolume })} format={percent} />
         <Toggle

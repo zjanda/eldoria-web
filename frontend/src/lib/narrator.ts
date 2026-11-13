@@ -63,6 +63,50 @@ function classifyGender(name: string): VoiceGender {
   return "unknown";
 }
 
+/**
+ * A stable, unique id for a browser voice. `voiceURI` alone is not unique on every browser
+ * (several Android and iOS voices share one), so name and language are part of the id.
+ */
+export function deviceVoiceKey(voice: Pick<SpeechSynthesisVoice, "name" | "lang" | "voiceURI">): string {
+  return `${voice.name}|${voice.lang}|${voice.voiceURI}`;
+}
+
+/** The browser's voices without exact duplicates (some browsers list the same voice twice). */
+function uniqueDeviceVoices(): SpeechSynthesisVoice[] {
+  if (typeof window === "undefined" || !("speechSynthesis" in window)) return [];
+  const seen = new Set<string>();
+  return window.speechSynthesis.getVoices().filter((voice) => {
+    const key = deviceVoiceKey(voice);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/**
+ * Finds the browser voice for a stored id. Ids saved by older versions were the bare `voiceURI`;
+ * those still resolve (to the first voice with that URI) so a player's choice survives the change.
+ */
+function findDeviceVoice(id: string | null): SpeechSynthesisVoice | null {
+  if (!id) return null;
+  const voices = uniqueDeviceVoices();
+  return voices.find((voice) => deviceVoiceKey(voice) === id) ?? voices.find((voice) => voice.voiceURI === id) ?? null;
+}
+
+/** Converts a stored voice id to the current form, or null if no such voice exists here. */
+export function migrateDeviceVoiceId(id: string | null): string | null {
+  const voice = findDeviceVoice(id);
+  return voice ? deviceVoiceKey(voice) : null;
+}
+
+/**
+ * Android browsers often speak with the phone's own text-to-speech voice whatever voice a page
+ * asks for (or honour only its language), so the settings say so there. Not detectable directly.
+ */
+export function deviceIgnoresVoiceChoice(): boolean {
+  return typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent ?? "");
+}
+
 function friendlyLabel(voice: SpeechSynthesisVoice): string {
   return voice.name
     .replace(/^Microsoft\s+/i, "")
@@ -109,7 +153,19 @@ export function pickVoice(voices: NarratorVoice[], gender: "female" | "male"): N
 
 type Listener = (speaking: boolean) => void;
 
-class Narrator {
+/** How one line is spoken, fixed when the line is queued so later setting changes cannot alter it. */
+type SpeechSettings = Omit<NarratorConfig, "enabled">;
+
+interface QueuedLine {
+  text: string;
+  settings: SpeechSettings;
+  // Cloud lines start synthesising as soon as they are queued, so playback has no gaps.
+  audio: Promise<string | null> | null;
+}
+
+const delay = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+
+export class Narrator {
   private config: NarratorConfig = {
     enabled: false,
     source: "device",
@@ -119,11 +175,16 @@ class Narrator {
     pitch: 1,
     volume: 1,
   };
-  // Cloud lines start synthesising as soon as they are queued, so playback has no gaps.
-  private queue: { text: string; audio: Promise<string | null> | null }[] = [];
+  private queue: QueuedLine[] = [];
   private generation = 0;
+  /** Generation whose queue is being read (or about to be), so only one reader runs at a time. */
+  private activeDrain: number | null = null;
   private speaking = false;
   private currentAudio: HTMLAudioElement | null = null;
+  // Held so the browser cannot garbage-collect an utterance mid-speech (which silently ends it in Chromium).
+  private liveUtterance: SpeechSynthesisUtterance | null = null;
+  /** Resolves once the most recent utterance has ended or reported its cancellation. */
+  private liveUtteranceDone: Promise<void> = Promise.resolve();
   private listeners = new Set<Listener>();
   private unlocked = false;
 
@@ -170,8 +231,8 @@ class Narrator {
 
   deviceVoices(): NarratorVoice[] {
     if (!this.supported) return [];
-    return window.speechSynthesis.getVoices().map((voice) => ({
-      id: voice.voiceURI,
+    return uniqueDeviceVoices().map((voice) => ({
+      id: deviceVoiceKey(voice),
       label: friendlyLabel(voice),
       gender: classifyGender(voice.name),
       source: "device" as const,
@@ -195,6 +256,7 @@ class Narrator {
   stop() {
     this.generation += 1;
     this.queue = [];
+    this.activeDrain = null;
     if (this.supported) window.speechSynthesis.cancel();
     if (this.currentAudio) {
       this.currentAudio.pause();
@@ -203,50 +265,63 @@ class Narrator {
     this.setSpeaking(false);
   }
 
-  /** Queue lines to be read after anything already queued. */
+  /** Queue lines to be read after anything already queued, with the current settings. */
   enqueue(lines: string[]) {
     if (!this.config.enabled) return;
     const cleaned = lines.map((line) => line.trim()).filter(Boolean);
     if (!cleaned.length) return;
-    this.queue.push(...cleaned.map((text) => this.queueItem(text)));
-    if (!this.speaking) void this.drain(this.generation);
+    const settings = this.currentSettings();
+    this.queue.push(...cleaned.map((text) => this.queueItem(text, settings)));
+    if (this.activeDrain !== this.generation) void this.drain(this.generation);
   }
 
-  /** Interrupt and read this text now (replay buttons, voice previews). */
+  /**
+   * Interrupt and read this text now (replay buttons, voice previews). `overrides` apply to this
+   * line only; the narrator's own settings are never changed, so nothing has to be restored.
+   */
   speakNow(text: string, overrides?: Partial<NarratorConfig>) {
     this.stop();
-    const previous = this.config;
-    if (overrides) this.config = { ...this.config, ...overrides, enabled: true };
-    this.queue.push(this.queueItem(text));
     const generation = this.generation;
-    // Chrome can silently drop an utterance queued in the same tick as cancel().
-    window.setTimeout(() => {
-      void this.drain(generation).finally(() => {
-        if (overrides) this.config = previous;
-      });
-    }, 60);
+    this.queue.push(this.queueItem(text, { ...this.currentSettings(), ...overrides }));
+    this.activeDrain = generation;
+    this.setSpeaking(true);
+    // Speech queued before the cancelled utterance has finished can be dropped or spoken with the
+    // wrong voice in Chromium, so wait for it to end (at most 400 ms) and at least 60 ms.
+    const cancelled = Promise.race([this.liveUtteranceDone, delay(400)]);
+    void Promise.all([cancelled, delay(60)]).then(() => {
+      if (generation === this.generation) void this.drain(generation);
+    });
+  }
+
+  private currentSettings(): SpeechSettings {
+    const { enabled: _enabled, ...settings } = this.config;
+    return settings;
   }
 
   private async drain(generation: number) {
+    this.activeDrain = generation;
     this.setSpeaking(true);
     while (this.queue.length && generation === this.generation) {
       const item = this.queue.shift()!;
       try {
         const url = item.audio ? await item.audio : null;
-        if (url) await this.playAudio(url, generation);
+        if (url) await this.playAudio(url, item.settings, generation);
         // Device voice is the fallback if an AI voice line could not be generated.
-        else if (generation === this.generation) await this.speakDevice(item.text, generation);
+        else if (generation === this.generation) await this.speakDevice(item.text, item.settings, generation);
       } catch (error) {
         console.warn("Narrator could not speak:", error);
       }
     }
-    if (generation === this.generation) this.setSpeaking(false);
+    if (generation === this.generation) {
+      this.activeDrain = null;
+      this.setSpeaking(false);
+    }
   }
 
-  private speakDevice(text: string, generation: number): Promise<void> {
+  private speakDevice(text: string, settings: SpeechSettings, generation: number): Promise<void> {
     if (!this.supported) return Promise.resolve();
     const synth = window.speechSynthesis;
-    const voice = synth.getVoices().find((v) => v.voiceURI === this.config.deviceVoiceId) ?? null;
+    const voice = findDeviceVoice(settings.deviceVoiceId);
     const chunks = chunkText(text);
     return new Promise((resolve) => {
       let index = 0;
@@ -257,20 +332,31 @@ class Narrator {
           utterance.voice = voice;
           utterance.lang = voice.lang;
         }
-        utterance.rate = this.config.rate;
-        utterance.pitch = this.config.pitch;
-        utterance.volume = this.config.volume;
-        utterance.onend = next;
-        utterance.onerror = next;
+        utterance.rate = settings.rate;
+        utterance.pitch = settings.pitch;
+        utterance.volume = settings.volume;
+        let markDone: () => void = () => undefined;
+        this.liveUtteranceDone = new Promise<void>((done) => (markDone = done));
+        this.liveUtterance = utterance;
+        let finished = false;
+        const finish = () => {
+          if (finished) return;
+          finished = true;
+          if (this.liveUtterance === utterance) this.liveUtterance = null;
+          markDone();
+          next();
+        };
+        utterance.onend = finish;
+        utterance.onerror = finish;
         synth.speak(utterance);
       };
       next();
     });
   }
 
-  private queueItem(text: string) {
-    const cloud = this.config.source === "cloud" && this.config.cloudVoiceId;
-    return { text, audio: cloud ? this.fetchAudio(text, this.config.cloudVoiceId) : null };
+  private queueItem(text: string, settings: SpeechSettings): QueuedLine {
+    const cloud = settings.source === "cloud" && settings.cloudVoiceId;
+    return { text, settings, audio: cloud ? this.fetchAudio(text, settings.cloudVoiceId) : null };
   }
 
   private async fetchAudio(text: string, voiceId: string): Promise<string | null> {
@@ -288,12 +374,12 @@ class Narrator {
     }
   }
 
-  private async playAudio(url: string, generation: number): Promise<void> {
+  private async playAudio(url: string, settings: SpeechSettings, generation: number): Promise<void> {
     if (generation !== this.generation) return;
     await new Promise<void>((resolve) => {
       const element = new Audio(url);
-      element.volume = this.config.volume;
-      element.playbackRate = this.config.rate;
+      element.volume = settings.volume;
+      element.playbackRate = settings.rate;
       this.currentAudio = element;
       element.onended = () => resolve();
       element.onerror = () => resolve();

@@ -28,6 +28,8 @@ export interface Settings {
   volume: number;
   /** Play music composed for each place, where the server has a music generator. */
   musicEnabled: boolean;
+  /** Play generated nearby sounds (tavern murmur, cave drips) under the music and ambience. */
+  nearbySoundsEnabled: boolean;
   // Display & gameplay
   diceAnimations: boolean;
   reduceMotion: boolean;
@@ -53,6 +55,7 @@ export const DEFAULT_SETTINGS: Settings = {
   audioEnabled: true,
   volume: 0.6,
   musicEnabled: true,
+  nearbySoundsEnabled: true,
   diceAnimations: true,
   reduceMotion: false,
 };

@@ -19,6 +19,7 @@ import { SidePanels } from "./panels/SidePanels";
 import { SceneView } from "./scene/SceneView";
 import { SettingsMenu } from "./settings/SettingsMenu";
 import { useSceneMusic } from "../hooks/useSceneMusic";
+import { useNearbySounds } from "../hooks/useNearbySounds";
 
 type Phase = "idle" | "dice" | "reveal";
 type ChronicleView = "story" | "recaps" | "everything";
@@ -131,6 +132,8 @@ export function GameScreen({
   }, [inCombat, adventure.scene.ambient_sound]);
   // Composed music takes over from the synthesized ambience whenever a track for this moment is ready.
   const music = useSceneMusic(adventure, settings.audioEnabled && settings.musicEnabled);
+  // Generated nearby sounds (tavern murmur, cave drips) play quietly under the music and ambience.
+  const nearby = useNearbySounds(adventure, settings.audioEnabled && settings.nearbySoundsEnabled);
   useEffect(
     () => () => {
       audio.stopAmbience();
@@ -332,7 +335,7 @@ export function GameScreen({
 
       <AnimatePresence>
         {settingsOpen && (
-          <SettingsMenu storyControl={adventure.story_control} richNarration={adventure.rich_narration} storyBusy={submitting} onStoryControl={(level) => void onStoryAction("control", level)} onRichNarration={(rich) => void onStoryAction("narration", rich)} key="settings" settings={settings} voices={voices} music={music} onChange={onSettingsChange} onReset={onResetSettings} onClose={() => setSettingsOpen(false)} />
+          <SettingsMenu storyControl={adventure.story_control} richNarration={adventure.rich_narration} storyBusy={submitting} onStoryControl={(level) => void onStoryAction("control", level)} onRichNarration={(rich) => void onStoryAction("narration", rich)} key="settings" settings={settings} voices={voices} music={music} nearby={nearby} onChange={onSettingsChange} onReset={onResetSettings} onClose={() => setSettingsOpen(false)} />
         )}
       </AnimatePresence>
 
