@@ -1,5 +1,6 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { Ability, Attribute, Character, Composition, EffectBlock, Equipment, EquipmentSlot, HeroSheet, Pronouns } from "../../api/types";
+import { Hint, type HintText } from "../common/Hint";
 import { Sigil } from "../common/Sigil";
 
 // Mirrors SKILL_ATTRIBUTES in backend/app/models/state.py.
@@ -40,6 +41,35 @@ const ALLY_CONDITIONS = ["hidden", "guarding"];
 const label = (text: string) => text.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
 const modifierOf = (score: number) => Math.floor((score - 10) / 2);
 const signed = (value: number) => (value >= 0 ? `+${value}` : `${value}`);
+// Mirrors Character.proficiency in backend/app/models/state.py.
+const proficiencyAt = (level: number) => 2 + Math.floor((Math.max(1, level) - 1) / 2);
+
+const ATTRIBUTE_HINTS: Record<Attribute, string> = {
+  might: "Raw strength and toughness: lifting, breaking, grappling, heavy blows. Athletics uses it.",
+  agility: "Speed, balance and a light touch. It also adds to Armor Class, as far as the armor worn allows. Acrobatics, Stealth and Sleight of hand use it.",
+  wits: "Reasoning, memory and learning. Arcana, Investigation, Nature and Lore use it.",
+  spirit: "Awareness, intuition and inner strength. Insight, Perception, Medicine, Survival and Animal handling use it.",
+  presence: "Force of personality: how well this hero sways, fools or frightens others. Persuasion, Deception and Intimidation use it.",
+};
+const SKILL_HINTS: Record<string, string> = {
+  athletics: "Climbing, swimming, jumping, shoving and feats of strength.",
+  acrobatics: "Balance, tumbling, and staying on your feet when the ground is against you.",
+  stealth: "Moving unseen and unheard.",
+  sleight_of_hand: "Picking pockets, palming objects and other quick work with the fingers.",
+  arcana: "Knowing magic: spells, enchanted things and the forces behind them.",
+  investigation: "Searching for clues and working out what they mean.",
+  nature: "Knowing plants, beasts, weather and the land.",
+  lore: "Knowing history, legends, peoples and old tales.",
+  insight: "Reading people: their mood, their motives, and whether they are lying.",
+  perception: "Noticing what is there: sounds, movement, hidden things.",
+  medicine: "Tending wounds, steadying the dying and recognising illness.",
+  survival: "Tracking, finding the way, and living off the wild.",
+  animal_handling: "Calming, guiding and understanding animals.",
+  persuasion: "Winning someone over honestly, with reason, charm or good faith.",
+  deception: "Lying convincingly and hiding the truth.",
+  intimidation: "Getting your way through threat and menace.",
+};
+
 const toList = (text: string) => text.split(",").map((part) => part.trim()).filter(Boolean);
 const whole = (text: string, fallback: number) => (Number.isFinite(parseInt(text, 10)) ? parseInt(text, 10) : fallback);
 
@@ -131,33 +161,80 @@ export function SheetForm({ sheet, onChange, inPlay = false }: SheetFormProps) {
       <Section heading="Body and training" note="The numbers behind the dice. Change any of them: your edit is final.">
         <div className="grid grid-cols-5 gap-1.5">
           {ATTRIBUTES.map((attribute) => (
-            <label key={attribute} className="rounded border border-white/5 bg-ink/30 p-1.5 text-center">
-              <span className="block text-[0.6rem] uppercase tracking-wider text-mist">{attribute}</span>
-              <input className="w-full bg-transparent text-center font-display text-lg text-parchment focus:outline-none" inputMode="numeric" aria-label={attribute}
-                value={sheet.attributes[attribute]} onChange={(e) => set({ attributes: { ...sheet.attributes, [attribute]: whole(e.target.value, 10) } })} />
-              <span className="block text-[0.68rem] text-gold-soft">{signed(modifierOf(sheet.attributes[attribute]))}</span>
-            </label>
+            <Hint key={attribute} hint={{
+              title: label(attribute),
+              text: `${ATTRIBUTE_HINTS[attribute]} A score of 10 is average; every 2 points above or below changes the modifier by 1.`,
+              detail: `Now: ${signed(modifierOf(sheet.attributes[attribute]))} on every roll that uses ${label(attribute)}.`,
+            }}>
+              <label className="block rounded border border-white/5 bg-ink/30 p-1.5 text-center">
+                <span className="block text-[0.6rem] uppercase tracking-wider text-mist">{attribute}</span>
+                <input className="w-full bg-transparent text-center font-display text-lg text-parchment focus:outline-none" inputMode="numeric" aria-label={attribute}
+                  value={sheet.attributes[attribute]} onChange={(e) => set({ attributes: { ...sheet.attributes, [attribute]: whole(e.target.value, 10) } })} />
+                <span className="block text-[0.68rem] text-gold-soft">{signed(modifierOf(sheet.attributes[attribute]))}</span>
+              </label>
+            </Hint>
           ))}
         </div>
         <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-5">
-          <Num label="Level" value={sheet.level} onChange={(level) => set({ level })} />
-          <Num label="Max hit points" value={sheet.max_hp} onChange={(max_hp) => set({ max_hp })} />
-          <div>
+          <Num label="Level" value={sheet.level} onChange={(level) => set({ level })} hint={{
+            title: "Level",
+            text: "How experienced this hero is. Level sets the training bonus added to trained skills: +2 at levels 1 and 2, then one more every two levels.",
+            detail: `Now: trained skills add +${proficiencyAt(sheet.level)}.`,
+          }} />
+          <Num label="Max hit points" value={sheet.max_hp} onChange={(max_hp) => set({ max_hp })} hint={{
+            title: "Max hit points",
+            text: "How much harm this hero can take. Damage lowers hit points, healing and rest restore them up to this number, and at 0 the hero falls.",
+          }} />
+          <Hint hint={{
+            title: "Armor Class",
+            text: "How hard this hero is to hit. An attack lands only when its roll equals or beats this number. Usually 10, plus armor, plus the Agility modifier as far as the armor allows.",
+            detail: `What is worn now gives ${suggestedArmor}.`,
+          }}>
             <Num label="Armor Class" value={sheet.armor_class} onChange={(armor_class) => set({ armor_class })} />
             {suggestedArmor !== sheet.armor_class && (
               <button type="button" className="mt-1 text-[0.68rem] text-gold-soft underline-offset-4 hover:underline" onClick={() => set({ armor_class: suggestedArmor })}>
                 From armor: {suggestedArmor}
               </button>
             )}
-          </div>
-          <Field label="Resource"><input className="input" value={sheet.resource_name} maxLength={24} placeholder="Faith, Mana, Rage…" onChange={(e) => set({ resource_name: e.target.value })} /></Field>
-          <Num label={`Max ${sheet.resource_name || "resource"}`} value={sheet.resource_max} onChange={(resource_max) => set({ resource_max })} />
-          {inPlay && <Num label="Hit points now" value={sheet.hp ?? sheet.max_hp} onChange={(hp) => set({ hp })} />}
-          {inPlay && <Num label={`${sheet.resource_name || "Resource"} now`} value={sheet.resource_current ?? sheet.resource_max} onChange={(resource_current) => set({ resource_current })} />}
+          </Hint>
+          <Field label="Resource" hint={{
+            title: "Resource",
+            text: "The name of what this hero spends to use spells and abilities. Call it anything that fits them: Faith, Mana, Rage, Focus. The name changes nothing in the rules.",
+          }}><input className="input" value={sheet.resource_name} maxLength={24} placeholder="Faith, Mana, Rage…" onChange={(e) => set({ resource_name: e.target.value })} /></Field>
+          <Num label={`Max ${sheet.resource_name || "resource"}`} value={sheet.resource_max} onChange={(resource_max) => set({ resource_max })} hint={{
+            title: `Max ${sheet.resource_name || "resource"}`,
+            text: `How much ${sheet.resource_name || "resource"} this hero holds when fully rested. Each ability spends its own cost from this pool, and rest refills it. With "Powers cost resource" switched off in the rules, nothing is spent.`,
+          }} />
+          {inPlay && <Num label="Hit points now" value={sheet.hp ?? sheet.max_hp} onChange={(hp) => set({ hp })} hint={{
+            title: "Hit points now",
+            text: "This hero's hit points at this moment in the tale. Change it to heal or wound them by your own word.",
+          }} />}
+          {inPlay && <Num label={`${sheet.resource_name || "Resource"} now`} value={sheet.resource_current ?? sheet.resource_max} onChange={(resource_current) => set({ resource_current })} hint={{
+            title: `${sheet.resource_name || "Resource"} now`,
+            text: `How much ${sheet.resource_name || "resource"} this hero has left at this moment in the tale.`,
+          }} />}
         </div>
-        <p className="label mb-1.5 mt-4">Trained skills</p>
+        <Hint className="mb-1.5 mt-4 w-fit" hint={{
+          title: "Trained skills",
+          text: "What this hero has practised. A trained skill adds the training bonus on top of its attribute modifier; an untrained one uses the modifier alone. Tap a skill to train or untrain it.",
+          detail: `Training bonus now: +${proficiencyAt(sheet.level)} (from level ${sheet.level}).`,
+        }}>
+          <p className="label cursor-help" tabIndex={0}>Trained skills</p>
+        </Hint>
         <div className="flex flex-wrap gap-1.5">
-          {SKILLS.map((skill) => <Choice key={skill.id} selected={sheet.proficient_skills.includes(skill.id)} onClick={() => toggleSkill(skill.id)}>{label(skill.id)}</Choice>)}
+          {SKILLS.map((skill) => {
+            const trained = sheet.proficient_skills.includes(skill.id);
+            const bonus = modifierOf(sheet.attributes[skill.attribute]) + (trained ? proficiencyAt(sheet.level) : 0);
+            return (
+              <Hint key={skill.id} className="inline-flex" hint={{
+                title: label(skill.id),
+                text: `${SKILL_HINTS[skill.id]} Uses ${label(skill.attribute)}.`,
+                detail: `${trained ? "Trained" : "Untrained"}: ${signed(bonus)} to the roll.`,
+              }}>
+                <Choice selected={trained} onClick={() => toggleSkill(skill.id)}>{label(skill.id)}</Choice>
+              </Hint>
+            );
+          })}
         </div>
       </Section>
 
@@ -173,7 +250,7 @@ export function SheetForm({ sheet, onChange, inPlay = false }: SheetFormProps) {
                 </div>
                 <div className="mt-2 grid gap-2 sm:grid-cols-2">
                   {slot === "weapon" && <input className="input" placeholder="How this hero uses it" maxLength={200} value={item.how_used} aria-label="How it is used" onChange={(e) => setEquipment(index, { how_used: e.target.value })} />}
-                  <input className="input" placeholder="Qualities, separated by commas" value={item.qualities.join(", ")} aria-label="Qualities" onChange={(e) => setEquipment(index, { qualities: toList(e.target.value) })} />
+                  <ListInput placeholder="Qualities, separated by commas" label="Qualities" items={item.qualities} onChange={(qualities) => setEquipment(index, { qualities })} />
                 </div>
                 {slot === "weapon" && (
                   <div className="mt-2 grid grid-cols-3 gap-2">
@@ -232,8 +309,8 @@ export function SheetForm({ sheet, onChange, inPlay = false }: SheetFormProps) {
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Appearance"><textarea className="input resize-y" rows={2} maxLength={400} value={sheet.appearance} onChange={(e) => set({ appearance: e.target.value })} /></Field>
           <Field label="Attire and gear"><textarea className="input resize-y" rows={2} maxLength={400} value={sheet.attire} onChange={(e) => set({ attire: e.target.value })} /></Field>
-          <Field label="Distinguishing marks"><input className="input" value={sheet.features.join(", ")} placeholder="Separated by commas" onChange={(e) => set({ features: toList(e.target.value) })} /></Field>
-          <Field label="Colours"><input className="input" value={sheet.palette.join(", ")} placeholder="Separated by commas" onChange={(e) => set({ palette: toList(e.target.value) })} /></Field>
+          <Field label="Distinguishing marks"><ListInput items={sheet.features} placeholder="Separated by commas" onChange={(features) => set({ features })} /></Field>
+          <Field label="Colours"><ListInput items={sheet.palette} placeholder="Separated by commas" onChange={(palette) => set({ palette })} /></Field>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-3">
           <div className="flex items-center gap-1.5" role="radiogroup" aria-label="Colour">
@@ -339,18 +416,37 @@ function Section({ heading, note, children }: { heading: string; note?: string; 
   );
 }
 
-function Field({ label: text, className = "", children }: { label: string; className?: string; children: ReactNode }) {
-  return (
-    <label className={`block ${className}`}>
+function Field({ label: text, className = "", hint, children }: { label: string; className?: string; hint?: HintText; children: ReactNode }) {
+  const field = (
+    <label className={`block ${hint ? "" : className}`}>
       <span className="label mb-1 block">{text}</span>
       {children}
     </label>
   );
+  return hint ? <Hint hint={hint} className={className}>{field}</Hint> : field;
 }
 
-function Num({ label: text, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+/** A comma-separated list. It keeps exactly what was typed (a trailing comma or space included), so the
+    box never fights the keyboard; the sheet receives the cleaned list. */
+function ListInput({ items, placeholder, label: name, onChange }: { items: string[]; placeholder?: string; label?: string; onChange: (items: string[]) => void }) {
+  const [text, setText] = useState(() => items.join(", "));
+  // The list changed from outside (a reforge, a discarded draft): show the new one.
+  const shown = toList(text);
+  const same = shown.length === items.length && shown.every((item, i) => item === items[i]);
+  useEffect(() => {
+    if (!same) setText(items.join(", "));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items.join(" ")]);
   return (
-    <Field label={text}>
+    <input className="input" value={text} placeholder={placeholder} aria-label={name}
+      onChange={(e) => { setText(e.target.value); onChange(toList(e.target.value)); }}
+      onBlur={() => setText(items.join(", "))} />
+  );
+}
+
+function Num({ label: text, value, hint, onChange }: { label: string; value: number; hint?: HintText; onChange: (value: number) => void }) {
+  return (
+    <Field label={text} hint={hint}>
       <input className="input" inputMode="numeric" value={value} onChange={(e) => onChange(Math.max(0, whole(e.target.value, 0)))} />
     </Field>
   );
