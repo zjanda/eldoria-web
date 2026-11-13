@@ -11,7 +11,11 @@ interface SceneViewProps {
   speakingId: string | null;
 }
 
-const LIGHTING_LABEL = { radiant: "Radiant light", dim: "Dim light", dark: "Darkness" } as const;
+// Softens the picture's own edges so it melts into the blurred fill around it.
+const PICTURE_EDGE_FADE =
+  "linear-gradient(to right, transparent, black 5%, black 95%, transparent), linear-gradient(to bottom, transparent, black 4%, black 96%, transparent)";
+
+const LIGHTING_LABEL ={ radiant: "Radiant light", dim: "Dim light", dark: "Darkness" } as const;
 
 export function SceneView({ adventure, speakingId }: SceneViewProps) {
   const { scene } = adventure;
@@ -32,7 +36,17 @@ export function SceneView({ adventure, speakingId }: SceneViewProps) {
           transition={{ duration: 1.6, ease: "easeOut" }}
         >
           {imageUrl ? (
-            <img src={imageUrl} alt={scene.title} className="h-full w-full animate-breathe object-cover" />
+            <>
+              {/* The whole picture is always shown. Where the frame is wider or taller than the picture,
+                  a blurred, darkened copy of it fills the rest instead of cropping heads and feet. */}
+              <img src={imageUrl} alt="" aria-hidden className="absolute inset-0 h-full w-full scale-110 animate-breathe object-cover opacity-60 blur-2xl brightness-[0.55]" />
+              <img
+                src={imageUrl}
+                alt={scene.title}
+                className="relative mx-auto block h-full w-auto max-w-full object-contain"
+                style={{ maskImage: PICTURE_EDGE_FADE, WebkitMaskImage: PICTURE_EDGE_FADE, maskComposite: "intersect", WebkitMaskComposite: "source-in" }}
+              />
+            </>
           ) : (
             <SceneArt artKey={scene.art_key} visualState={scene.visual_state} />
           )}

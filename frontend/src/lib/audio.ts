@@ -1,26 +1,61 @@
 /**
- * Procedural ambience and sound effects with the Web Audio API — no audio
- * files to ship. Each ambience is a soft drone plus filtered "wind" noise,
- * tuned per location.
+ * Procedural ambience and sound effects with the Web Audio API: no audio files to ship.
+ *
+ * Each ambience is a quiet musical pad (a consonant chord whose voices swell in and out on their
+ * own slow cycles), a breath of mid-range "air", and a few sparse notes, all in a soft reverb.
+ * Nothing sits below about 130 Hz and no two voices are close enough in pitch to throb against
+ * each other: low, beating tones are what make a drone sound like an engine.
  */
 
 interface AmbiencePreset {
-  drone: number[]; // Hz
-  droneGain: number;
-  noiseFilter: number; // Hz lowpass
-  noiseGain: number;
-  shimmer?: boolean;
-  pulse?: number; // seconds between low pulses
+  /** Pad chord in Hz, lowest first. */
+  chord: number[];
+  padGain: number;
+  /** Lowpass on the pad in Hz: lower is darker and softer. */
+  warmth: number;
+  /** Seconds for one swell of a voice; each voice drifts around this. */
+  swell: number;
+  /** Centre of the air band in Hz, and how loud it is. */
+  airTone: number;
+  airGain: number;
+  /** Sparse single notes over the pad. */
+  motif?: { notes: number[]; everySeconds: [number, number]; level: number; attack: number; decay: number };
 }
 
 const PRESETS: Record<string, AmbiencePreset> = {
-  fey_court: { drone: [220, 277.2, 329.6], droneGain: 0.018, noiseFilter: 2200, noiseGain: 0.012, shimmer: true },
-  forest_night: { drone: [98, 146.8], droneGain: 0.02, noiseFilter: 700, noiseGain: 0.05 },
-  shadow_road: { drone: [61.7, 65.4, 92.5], droneGain: 0.03, noiseFilter: 400, noiseGain: 0.03 },
-  cave: { drone: [82.4, 123.5], droneGain: 0.022, noiseFilter: 300, noiseGain: 0.03, pulse: 3.3 },
-  combat: { drone: [55, 82.4], droneGain: 0.03, noiseFilter: 500, noiseGain: 0.035, pulse: 0.9 },
-  gate: { drone: [41.2, 43.7, 61.7], droneGain: 0.04, noiseFilter: 250, noiseGain: 0.04 },
+  // Bright and open: A major with an added ninth, and small bell notes.
+  fey_court: {
+    chord: [220, 329.63, 493.88, 554.37], padGain: 0.03, warmth: 1800, swell: 14, airTone: 2400, airGain: 0.006,
+    motif: { notes: [880, 987.77, 1108.73, 1318.51, 1479.98], everySeconds: [4, 9], level: 0.014, attack: 0.03, decay: 3.5 },
+  },
+  // Calm and open: D with fifths and a ninth, a little night air, a rare slow note.
+  forest_night: {
+    chord: [146.83, 220, 329.63, 440], padGain: 0.032, warmth: 1100, swell: 18, airTone: 900, airGain: 0.012,
+    motif: { notes: [293.66, 329.63, 440, 493.88, 587.33], everySeconds: [9, 18], level: 0.012, attack: 0.5, decay: 5 },
+  },
+  // Uneasy but quiet: D minor with a flat sixth on top.
+  shadow_road: {
+    chord: [146.83, 220, 349.23, 466.16], padGain: 0.03, warmth: 900, swell: 20, airTone: 600, airGain: 0.01,
+    motif: { notes: [293.66, 349.23, 440, 466.16], everySeconds: [12, 22], level: 0.011, attack: 0.8, decay: 6 },
+  },
+  // Hollow and still: bare fifths, with single high drops of sound.
+  cave: {
+    chord: [164.81, 246.94, 329.63], padGain: 0.028, warmth: 800, swell: 22, airTone: 450, airGain: 0.008,
+    motif: { notes: [1318.51, 1567.98, 1975.53, 2349.32], everySeconds: [3, 8], level: 0.01, attack: 0.005, decay: 1.2 },
+  },
+  // Tense and moving: E minor, quicker swells, no drums.
+  combat: {
+    chord: [164.81, 246.94, 392, 493.88], padGain: 0.034, warmth: 1300, swell: 5, airTone: 1200, airGain: 0.008,
+    motif: { notes: [329.63, 369.99, 392, 493.88], everySeconds: [2.5, 5], level: 0.014, attack: 0.15, decay: 2.2 },
+  },
+  // Ominous: a fifth with a tritone above it, dark and slow.
+  gate: {
+    chord: [130.81, 196, 277.18, 392], padGain: 0.03, warmth: 750, swell: 24, airTone: 500, airGain: 0.01,
+    motif: { notes: [261.63, 277.18, 392], everySeconds: [14, 26], level: 0.011, attack: 1, decay: 7 },
+  },
 };
+
+const between = (low: number, high: number) => low + Math.random() * (high - low);
 
 class AudioEngine {
   private context: AudioContext | null = null;
@@ -28,6 +63,10 @@ class AudioEngine {
   private activeNodes: AudioNode[] = [];
   private activeTimers: number[] = [];
   private currentKey: string | null = null;
+  private airBuffer: AudioBuffer | null = null;
+  private reverbBuffer: AudioBuffer | null = null;
+  /** Bumped whenever the ambience stops, so the note scheduling of the old one ends. */
+  private session = 0;
   enabled = false;
   volume = 0.7;
 
@@ -68,34 +107,75 @@ class AudioEngine {
     this.master.gain.setTargetAtTime(target, this.context.currentTime, 0.25);
   }
 
+  /** Short brown-ish noise, used for the dice clicks. */
   private noiseBuffer(context: AudioContext): AudioBuffer {
     const buffer = context.createBuffer(1, context.sampleRate * 2, context.sampleRate);
     const data = buffer.getChannelData(0);
     let last = 0;
     for (let i = 0; i < data.length; i++) {
-      // Brown-ish noise: smoother, more like wind.
       last = (last + 0.02 * (Math.random() * 2 - 1)) / 1.02;
       data[i] = last * 3.5;
     }
     return buffer;
   }
 
+  /** Twelve seconds of pink noise: long enough that the loop is not heard repeating. */
+  private air(context: AudioContext): AudioBuffer {
+    if (this.airBuffer) return this.airBuffer;
+    const fade = Math.floor(context.sampleRate * 0.5);
+    const length = context.sampleRate * 12;
+    const raw = new Float32Array(length + fade);
+    let b0 = 0, b1 = 0, b2 = 0;
+    for (let i = 0; i < raw.length; i++) {
+      const white = Math.random() * 2 - 1;
+      b0 = 0.99765 * b0 + white * 0.099046;
+      b1 = 0.963 * b1 + white * 0.2965164;
+      b2 = 0.57 * b2 + white * 1.0526913;
+      raw[i] = (b0 + b1 + b2 + white * 0.1848) * 0.2;
+    }
+    // Blend the tail into the start so the loop point makes no click.
+    for (let i = 0; i < fade; i++) {
+      const mix = i / fade;
+      raw[i] = raw[i] * mix + raw[length + i] * (1 - mix);
+    }
+    const buffer = context.createBuffer(1, length, context.sampleRate);
+    buffer.getChannelData(0).set(raw.subarray(0, length));
+    return (this.airBuffer = buffer);
+  }
+
+  /** A soft hall: decaying noise used as a reverb impulse. */
+  private hall(context: AudioContext): AudioBuffer {
+    if (this.reverbBuffer) return this.reverbBuffer;
+    const buffer = context.createBuffer(2, Math.floor(context.sampleRate * 3.2), context.sampleRate);
+    for (let channel = 0; channel < 2; channel++) {
+      const data = buffer.getChannelData(channel);
+      let smooth = 0;
+      for (let i = 0; i < data.length; i++) {
+        // Smoothed so the tail is warm rather than hissy.
+        smooth = smooth * 0.6 + (Math.random() * 2 - 1) * 0.4;
+        data[i] = smooth * Math.pow(1 - i / data.length, 3.2);
+      }
+    }
+    return (this.reverbBuffer = buffer);
+  }
+
   stopAmbience() {
+    this.session += 1;
     const context = this.context;
     for (const node of this.activeNodes) {
       try {
         if (node instanceof GainNode && context) {
           node.gain.setTargetAtTime(0, context.currentTime, 0.6);
-          window.setTimeout(() => node.disconnect(), 2500);
+          window.setTimeout(() => node.disconnect(), 3500);
         } else if (node instanceof AudioScheduledSourceNode) {
-          node.stop((context?.currentTime ?? 0) + 2.5);
+          node.stop((context?.currentTime ?? 0) + 3.5);
         }
       } catch {
         /* node already stopped */
       }
     }
     this.activeNodes = [];
-    this.activeTimers.forEach((t) => window.clearInterval(t));
+    this.activeTimers.forEach((t) => window.clearTimeout(t));
     this.activeTimers = [];
   }
 
@@ -107,50 +187,109 @@ class AudioEngine {
     if (!context || !this.master) return;
     this.stopAmbience();
     const preset = PRESETS[key] ?? PRESETS.forest_night;
+    const now = context.currentTime;
 
+    // Everything plays into one bus, heard directly and through the hall.
     const bus = context.createGain();
     bus.gain.value = 0;
-    bus.gain.setTargetAtTime(1, context.currentTime, 1.5);
-    bus.connect(this.master);
-    this.activeNodes.push(bus);
+    bus.gain.setTargetAtTime(1, now, 2.5);
+    const dry = context.createGain();
+    dry.gain.value = 0.75;
+    const wet = context.createGain();
+    wet.gain.value = 0.55;
+    const reverb = context.createConvolver();
+    reverb.buffer = this.hall(context);
+    bus.connect(dry).connect(this.master);
+    bus.connect(reverb).connect(wet).connect(this.master);
+    this.activeNodes.push(bus, wet);
 
-    for (const frequency of preset.drone) {
-      const oscillator = context.createOscillator();
-      oscillator.type = "sine";
-      oscillator.frequency.value = frequency;
-      const lfo = context.createOscillator();
-      lfo.frequency.value = 0.05 + Math.random() * 0.1;
-      const lfoGain = context.createGain();
-      lfoGain.gain.value = frequency * 0.004;
-      lfo.connect(lfoGain).connect(oscillator.frequency);
-      const gain = context.createGain();
-      gain.gain.value = preset.droneGain;
-      oscillator.connect(gain).connect(bus);
-      oscillator.start();
-      lfo.start();
-      this.activeNodes.push(oscillator, lfo);
-    }
+    // The pad: each chord tone is two gently detuned voices, swelling on its own slow cycle.
+    const tone = context.createBiquadFilter();
+    tone.type = "lowpass";
+    tone.frequency.value = preset.warmth;
+    tone.Q.value = 0.3;
+    tone.connect(bus);
+    preset.chord.forEach((frequency, index) => {
+      // Higher voices sit further back, so the chord stays soft at the top.
+      const level = preset.padGain / (1 + index * 0.45);
+      const voice = context.createGain();
+      voice.gain.value = level * 0.6;
+      const swell = context.createOscillator();
+      swell.frequency.value = 1 / (preset.swell * between(0.75, 1.35));
+      const depth = context.createGain();
+      depth.gain.value = level * 0.4;
+      swell.connect(depth).connect(voice.gain);
+      swell.start(now);
+      voice.connect(tone);
+      this.activeNodes.push(swell);
+      for (const [type, cents, share] of [["sine", -3, 1], ["triangle", 3, 0.35]] as const) {
+        const oscillator = context.createOscillator();
+        oscillator.type = type;
+        oscillator.frequency.value = frequency;
+        oscillator.detune.value = cents;
+        const part = context.createGain();
+        part.gain.value = share;
+        oscillator.connect(part).connect(voice);
+        oscillator.start(now);
+        this.activeNodes.push(oscillator);
+      }
+    });
 
-    const noise = context.createBufferSource();
-    noise.buffer = this.noiseBuffer(context);
-    noise.loop = true;
-    const filter = context.createBiquadFilter();
-    filter.type = "lowpass";
-    filter.frequency.value = preset.noiseFilter;
-    const noiseGain = context.createGain();
-    noiseGain.gain.value = preset.noiseGain;
-    noise.connect(filter).connect(noiseGain).connect(bus);
-    noise.start();
-    this.activeNodes.push(noise);
+    // The air: a narrow band of soft noise that rises and falls like slow breath.
+    const air = context.createBufferSource();
+    air.buffer = this.air(context);
+    air.loop = true;
+    const band = context.createBiquadFilter();
+    band.type = "bandpass";
+    band.frequency.value = preset.airTone;
+    band.Q.value = 0.7;
+    const floor = context.createBiquadFilter();
+    floor.type = "highpass";
+    floor.frequency.value = 180;
+    const airGain = context.createGain();
+    airGain.gain.value = preset.airGain * 0.65;
+    const gust = context.createOscillator();
+    gust.frequency.value = 1 / between(11, 17);
+    const gustDepth = context.createGain();
+    gustDepth.gain.value = preset.airGain * 0.35;
+    gust.connect(gustDepth).connect(airGain.gain);
+    air.connect(band).connect(floor).connect(airGain).connect(bus);
+    air.start(now, Math.random() * 5);
+    gust.start(now);
+    this.activeNodes.push(air, gust);
 
-    if (preset.shimmer) {
-      this.activeTimers.push(
-        window.setInterval(() => this.chime(bus, 880 * [1, 1.25, 1.5, 2][Math.floor(Math.random() * 4)], 0.012), 2600),
-      );
+    // Sparse notes at uneven intervals, never the same one twice in a row.
+    const motif = preset.motif;
+    if (motif) {
+      const session = this.session;
+      let previous = -1;
+      const next = () => {
+        if (session !== this.session || !this.enabled) return;
+        let pick = Math.floor(Math.random() * motif.notes.length);
+        if (pick === previous) pick = (pick + 1) % motif.notes.length;
+        previous = pick;
+        this.note(bus, motif.notes[pick], motif.level * between(0.6, 1), motif.attack, motif.decay);
+        this.activeTimers.push(window.setTimeout(next, between(motif.everySeconds[0], motif.everySeconds[1]) * 1000));
+      };
+      this.activeTimers.push(window.setTimeout(next, between(2, motif.everySeconds[0] + 2) * 1000));
     }
-    if (preset.pulse) {
-      this.activeTimers.push(window.setInterval(() => this.thump(bus, 0.05), preset.pulse * 1000));
-    }
+  }
+
+  /** One soft sine note with its own attack and fade. */
+  private note(destination: AudioNode, frequency: number, level: number, attack: number, decay: number) {
+    const context = this.context;
+    if (!context) return;
+    const now = context.currentTime;
+    const oscillator = context.createOscillator();
+    oscillator.type = "sine";
+    oscillator.frequency.value = frequency;
+    const gain = context.createGain();
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.linearRampToValueAtTime(level, now + attack);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + attack + decay);
+    oscillator.connect(gain).connect(destination);
+    oscillator.start(now);
+    oscillator.stop(now + attack + decay + 0.1);
   }
 
   private chime(destination: AudioNode, frequency: number, level: number) {
@@ -166,20 +305,6 @@ class AudioEngine {
     oscillator.connect(gain).connect(destination);
     oscillator.start();
     oscillator.stop(context.currentTime + 2.6);
-  }
-
-  private thump(destination: AudioNode, level: number) {
-    const context = this.context;
-    if (!context) return;
-    const oscillator = context.createOscillator();
-    oscillator.frequency.setValueAtTime(90, context.currentTime);
-    oscillator.frequency.exponentialRampToValueAtTime(40, context.currentTime + 0.3);
-    const gain = context.createGain();
-    gain.gain.setValueAtTime(level, context.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.4);
-    oscillator.connect(gain).connect(destination);
-    oscillator.start();
-    oscillator.stop(context.currentTime + 0.45);
   }
 
   /** Rattling dice: a burst of short filtered clicks. */
