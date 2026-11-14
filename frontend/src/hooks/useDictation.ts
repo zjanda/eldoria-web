@@ -44,6 +44,32 @@ export function joinDictation(base: string, spoken: string): string {
   return base && !/\s$/.test(base) ? `${base} ${words}` : base + words;
 }
 
+/**
+ * What dictation has put in the box: the text it started from (`base`), the words confirmed since
+ * (`heard`), and exactly what it last wrote (`written`), so edits made in between can be noticed.
+ */
+export interface DictationState {
+  base: string;
+  heard: string;
+  written: string;
+}
+
+export function startDictation(current: string): DictationState {
+  return { base: current, heard: "", written: current };
+}
+
+/**
+ * The box after new speech. If the player changed the box since dictation last wrote to it (deleted
+ * or retyped something), their version is kept as it is and new words are added after it; words
+ * spoken earlier are never put back.
+ */
+export function applyDictation(state: DictationState, current: string, confirmed: string, interim: string): DictationState {
+  const edited = current !== state.written;
+  const base = edited ? current : state.base;
+  const heard = joinDictation(edited ? "" : state.heard, confirmed);
+  return { base, heard, written: joinDictation(base, joinDictation(heard, interim)) };
+}
+
 export function useDictation(text: string, setText: (value: string) => void) {
   const supported = recognitionClass() !== null;
   const [listening, setListening] = useState(false);
@@ -63,16 +89,21 @@ export function useDictation(text: string, setText: (value: string) => void) {
     engine.lang = navigator.language || "en-US";
     engine.continuous = true;
     engine.interimResults = true;
-    const base = textRef.current;
-    let heard = "";
+    let state = startDictation(textRef.current);
+    const write = (next: DictationState) => {
+      state = next;
+      textRef.current = next.written; // so a second result before the next render is not taken for an edit
+      setText(next.written);
+    };
     engine.onresult = (event) => {
+      let confirmed = "";
       let interim = "";
       for (let i = event.resultIndex; i < event.results.length; i += 1) {
         const result = event.results[i];
-        if (result.isFinal) heard = joinDictation(heard, result[0].transcript);
+        if (result.isFinal) confirmed = joinDictation(confirmed, result[0].transcript);
         else interim = joinDictation(interim, result[0].transcript);
       }
-      setText(joinDictation(base, joinDictation(heard, interim)));
+      write(applyDictation(state, textRef.current, confirmed, interim));
     };
     engine.onerror = (event) => {
       if (event.error !== "no-speech" && event.error !== "aborted") setProblem(MESSAGES[event.error] ?? "Speech recognition stopped unexpectedly.");
@@ -80,8 +111,9 @@ export function useDictation(text: string, setText: (value: string) => void) {
     engine.onend = () => {
       recognition.current = null;
       setListening(false);
-      // Drop any words that were still being recognised when it stopped; keep the confirmed ones.
-      setText(joinDictation(base, heard));
+      // Drop words still being recognised when it stopped and keep the confirmed ones, unless the
+      // player has edited the box since: then their text stays exactly as it is.
+      if (textRef.current === state.written) write(applyDictation(state, state.written, "", ""));
     };
     setProblem(null);
     recognition.current = engine;
