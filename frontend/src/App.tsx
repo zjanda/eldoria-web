@@ -114,7 +114,7 @@ export default function App() {
                 game.clearError();
                 setCreating(kind);
               }}
-              onRetry={game.retryConnection}
+              connection={game.connection}
             />
           </motion.div>
         )}

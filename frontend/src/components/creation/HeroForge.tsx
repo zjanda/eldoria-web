@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { api } from "../../api/client";
+import { api, isUnreachable } from "../../api/client";
 import type { CreationQuestion, GameRules, HeroSheet } from "../../api/types";
 import { Portrait } from "../common/Portrait";
 import { SceneArt } from "../scene/SceneArt";
@@ -122,7 +122,7 @@ export function HeroForge({ busy, error, onBegin, onCancel }: HeroForgeProps) {
       const response = await api.draftHero(draft.description.trim(), premise.trim(), companions, answers, established);
       patch({ sheet: response.sheet, questions: response.questions, replies: {}, answers, degraded: response.degraded });
     } catch (e) {
-      setForgeError((e as Error).message);
+      if (!isUnreachable(e)) setForgeError((e as Error).message);
     } finally {
       setForging(false);
     }

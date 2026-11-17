@@ -1,4 +1,5 @@
 import { motion } from "framer-motion";
+import { isUnreachable } from "../../api/client";
 import { useMemo, useState, type ReactNode } from "react";
 import type { NearbyLayerStatus, NearbySounds } from "../../hooks/useNearbySounds";
 import type { SceneMusic } from "../../hooks/useSceneMusic";
@@ -155,7 +156,7 @@ function MusicControls({ settings, music, onChange }: { settings: Settings; musi
     try {
       await music.composeAnother(direction.trim());
     } catch (error) {
-      setProblem(error instanceof Error ? error.message : "The new track could not be requested.");
+      if (!isUnreachable(error)) setProblem(error instanceof Error ? error.message : "The new track could not be requested.");
     } finally {
       setAsking(false);
     }
@@ -223,7 +224,7 @@ function NearbySoundControls({ settings, nearby, onChange }: { settings: Setting
       await nearby.makeAgain(layerId, direction.trim());
       setEditing(null);
     } catch (error) {
-      setProblem(error instanceof Error ? error.message : "The sound could not be requested.");
+      if (!isUnreachable(error)) setProblem(error instanceof Error ? error.message : "The sound could not be requested.");
     } finally {
       setAsking(false);
     }
