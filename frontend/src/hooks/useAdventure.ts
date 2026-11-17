@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, api } from "../api/client";
+import { api, isUnreachable } from "../api/client";
 import type { Adventure, DiceRoll, Fate, GameRules, HeroBuild, HeroSheet, ProviderStatus, SaveSummary, TurnResponse } from "../api/types";
 
 export interface TurnFeedback {
@@ -28,19 +28,40 @@ export function useAdventure() {
   const [providers, setProviders] = useState<ProviderStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setErrorMessage] = useState<string | null>(null);
+  /** Hosted demo only: "offline" when the private server cannot be reached, which is not shown as an error. */
+  const [connection, setConnection] = useState<"checking" | "online" | "offline">("checking");
   const [feedback, setFeedback] = useState<TurnFeedback | null>(null);
   const inFlight = useRef(false);
 
-  const refreshSaves = useCallback(() => {
-    api.saves().then(setSaves).catch((e: ApiError) => setError(e.message));
+  // Every failure in this hook is reported through here, so an unreachable server never shows an error.
+  const fail = useCallback((e: unknown) => {
+    if (isUnreachable(e)) {
+      setConnection("offline");
+      return;
+    }
+    setErrorMessage((e as Error).message);
   }, []);
+  const setError = useCallback((message: string | null) => setErrorMessage(message), []);
+
+  const refreshSaves = useCallback(() => {
+    api.saves().then(setSaves).catch(fail);
+  }, [fail]);
 
   const retryConnection = useCallback(() => {
     setError(null);
     refreshSaves();
-    api.health().then(setProviders).catch(() => setProviders(null));
-  }, [refreshSaves]);
+    api.health()
+      .then((status) => {
+        setProviders(status);
+        setConnection("online");
+      })
+      .catch((e: unknown) => {
+        setProviders(null);
+        setConnection("offline");
+        if (!isUnreachable(e)) fail(e);
+      });
+  }, [refreshSaves, setError, fail]);
 
   useEffect(retryConnection, [retryConnection]);
 
@@ -78,7 +99,7 @@ export function useAdventure() {
       setFeedback(null);
       return true;
     } catch (e) {
-      setError((e as Error).message);
+      fail(e);
       return false;
     } finally {
       setLoading(false);
@@ -94,7 +115,7 @@ export function useAdventure() {
       setFeedback(null);
       return true;
     } catch (e) {
-      setError((e as Error).message);
+      fail(e);
       return false;
     } finally {
       setLoading(false);
@@ -110,7 +131,7 @@ export function useAdventure() {
         setAdventure(await api.editHero(adventure.adventure_id, heroId, sheet));
         return true;
       } catch (e) {
-        setError((e as Error).message);
+        fail(e);
         return false;
       }
     },
@@ -125,7 +146,7 @@ export function useAdventure() {
       setAdventure(loaded);
       setFeedback(null);
     } catch (e) {
-      setError((e as Error).message);
+      fail(e);
     } finally {
       setLoading(false);
     }
@@ -136,7 +157,7 @@ export function useAdventure() {
       try {
         await api.renameSave(adventureId, name);
       } catch (e) {
-        setError((e as Error).message);
+        fail(e);
       }
       refreshSaves();
     },
@@ -148,7 +169,7 @@ export function useAdventure() {
       try {
         await api.deleteSave(adventureId);
       } catch (e) {
-        setError((e as Error).message);
+        fail(e);
       }
       refreshSaves();
     },
@@ -173,7 +194,7 @@ export function useAdventure() {
       });
       return true;
     } catch (e) {
-      setError((e as Error).message);
+      fail(e);
       return false;
     } finally {
       inFlight.current = false;
@@ -211,7 +232,7 @@ export function useAdventure() {
         setFeedback(null);
         return true;
       } catch (e) {
-        setError((e as Error).message);
+        fail(e);
         return false;
       }
     },
@@ -224,7 +245,7 @@ export function useAdventure() {
       try {
         setAdventure(await api.learnTechnique(adventure.adventure_id, offerId));
       } catch (e) {
-        setError((e as Error).message);
+        fail(e);
       }
     },
     [adventure],
@@ -240,7 +261,7 @@ export function useAdventure() {
             : await api.paintPortrait(adventure.adventure_id, target.id, direction, reference),
         );
       } catch (e) {
-        setError((e as Error).message);
+        fail(e);
       }
     },
     [adventure],
@@ -252,7 +273,7 @@ export function useAdventure() {
       try {
         setAdventure(await api.chooseArt(adventure.adventure_id, target.kind === "scene" ? "scene" : target.id, keep));
       } catch (e) {
-        setError((e as Error).message);
+        fail(e);
       }
     },
     [adventure],
@@ -276,7 +297,7 @@ export function useAdventure() {
       setFeedback(null);
       return true;
     } catch (e) {
-      setError((e as Error).message);
+      fail(e);
       return false;
     } finally {
       inFlight.current = false;
@@ -295,6 +316,7 @@ export function useAdventure() {
     adventure,
     saves,
     providers,
+    connection,
     loading,
     submitting,
     error,

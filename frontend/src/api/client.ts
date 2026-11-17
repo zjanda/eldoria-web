@@ -4,9 +4,15 @@ import type { Adventure, CreationOptions, Fate, GameRules, HeroBuild, HeroDraftR
 const CAMPAIGN_ID = "whispering_darkness";
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  /** True when the server could not be reached at all, as opposed to a real problem it reported. */
+  constructor(public status: number, message: string, public unreachable = false) {
     super(message);
   }
+}
+
+/** The hosted demo stays quiet about a server it cannot reach: those failures only mark the game offline. */
+export function isUnreachable(error: unknown): boolean {
+  return remoteBackend && error instanceof ApiError && error.unreachable;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -19,7 +25,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   } catch {
     throw new ApiError(0, remoteBackend
       ? "Cannot reach your private Eldoria server. Check that your PC is on and sign in to the server, then retry."
-      : "Cannot reach the Eldoria server. Is the backend running on port 8000?");
+      : "Cannot reach the Eldoria server. Is the backend running on port 8000?", true);
   }
   if (!response.ok) {
     let detail = response.statusText;
@@ -33,7 +39,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (response.status === 204) return undefined as T;
   if (remoteBackend && !response.headers.get("Content-Type")?.includes("application/json")) {
-    throw new ApiError(502, "Your private server did not return game data. Sign in to the server and retry.");
+    throw new ApiError(502, "Your private server did not return game data. Sign in to the server and retry.", true);
   }
   return response.json() as Promise<T>;
 }

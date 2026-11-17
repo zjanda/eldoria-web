@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { api } from "../../api/client";
+import { api, isUnreachable } from "../../api/client";
 import type { Attribute, CallingDefinition, CreationOptions, HeroBuild, HeroRole, Pronouns } from "../../api/types";
 import { Portrait } from "../common/Portrait";
 import { Sigil } from "../common/Sigil";
@@ -83,7 +83,7 @@ export function CharacterCreator({ busy, error, onBegin, onCancel }: CharacterCr
         setBuilds(Object.fromEntries(loaded.roles.map((role) => [role.id, role.default_build])));
         setActiveId(loaded.roles[0]?.id ?? "");
       })
-      .catch((e: Error) => !cancelled && setLoadError(e.message));
+      .catch((e: Error) => !cancelled && !isUnreachable(e) && setLoadError(e.message));
     return () => {
       cancelled = true;
     };

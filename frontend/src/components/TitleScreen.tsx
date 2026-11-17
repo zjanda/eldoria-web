@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useState } from "react";
-import { backendUrl, remoteBackend } from "../api/connection";
+import { remoteBackend } from "../api/connection";
 import type { ProviderStatus, SaveSummary } from "../api/types";
 import { SceneArt } from "./scene/SceneArt";
 
@@ -14,8 +14,12 @@ interface TitleScreenProps {
   onDelete: (adventureId: string) => void;
   /** "sandbox": an open tale with heroes of the player's own making. "premade": The Whispering Darkness. */
   onNew: (kind: "sandbox" | "premade") => void;
-  onRetry: () => void;
+  /** Hosted demo: whether the private server answered. Only what works is shown. */
+  connection: "checking" | "online" | "offline";
 }
+
+/** Where visitors play when the private server is not reachable. */
+const BROWSER_DEMO_URL = "https://portfolio.jandalisoftware.com/demo/eldoria";
 
 function timeAgo(iso: string) {
   const minutes = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
@@ -27,8 +31,10 @@ function timeAgo(iso: string) {
   return days === 1 ? "yesterday" : `${days} days ago`;
 }
 
-export function TitleScreen({ saves, providers, loading, error, onOpen, onRename, onDelete, onNew, onRetry }: TitleScreenProps) {
-  const latest = saves[0] ?? null;
+export function TitleScreen({ saves, providers, loading, error, onOpen, onRename, onDelete, onNew, connection }: TitleScreenProps) {
+  // The hosted build is a demo: without the private server none of the game's buttons can work, so they are hidden.
+  const playable = !remoteBackend || connection === "online";
+  const latest = playable ? saves[0] ?? null : null;
   const [showSaves, setShowSaves] = useState(false);
   return (
     <div className="relative h-full overflow-hidden">
@@ -45,6 +51,16 @@ export function TitleScreen({ saves, providers, loading, error, onOpen, onRename
         >
           Cinematic Tales of Your Own Making
         </motion.p>
+        {remoteBackend && (
+          <motion.span
+            className="label mb-4 rounded-full border border-gold/50 px-3 py-1 text-gold"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.6, duration: 1 }}
+          >
+            Demo
+          </motion.span>
+        )}
         <motion.h1
           className="font-display text-6xl font-semibold tracking-[0.18em] sm:text-8xl"
           style={{
@@ -92,11 +108,12 @@ export function TitleScreen({ saves, providers, loading, error, onOpen, onRename
               </span>
             </button>
           )}
-          {saves.length > 1 && (
+          {playable && saves.length > 1 && (
             <button className="btn-ghost py-3 font-display uppercase tracking-[0.2em]" onClick={() => setShowSaves((v) => !v)} aria-expanded={showSaves}>
               Saved Tales ({saves.length})
             </button>
           )}
+          {playable && <>
           <button className={latest ? "btn-ghost flex-col !gap-0.5 py-3 font-display uppercase tracking-[0.2em]" : "btn-gold flex-col !gap-0.5"} onClick={() => onNew("sandbox")} disabled={loading}>
             <span>{loading ? "Opening the tale…" : "New Tale"}</span>
             <span className="font-sans text-[0.68rem] normal-case tracking-normal text-mist">Your heroes, your world, no script</span>
@@ -106,16 +123,18 @@ export function TitleScreen({ saves, providers, loading, error, onOpen, onRename
             <span className="text-[0.68rem] text-mist">A written story to play through</span>
           </button>
           {latest && <p className="text-[0.7rem] text-mist/70">A new tale is a separate story; your other saves are kept.</p>}
-          {remoteBackend && <div className="space-y-2 text-sm text-mist">
-            <p>{providers ? "Connected to your private server." : "Connect to your private server to play."}</p>
-            <a className="block text-gold-soft underline" href={backendUrl("/api/health")} target="_blank" rel="noopener noreferrer">Sign in to private server</a>
-            <button className="btn-ghost w-full" onClick={onRetry} disabled={loading}>Retry connection</button>
-          </div>}
+          </>}
+          {remoteBackend && connection === "offline" && (
+            <a className="btn-gold flex-col !gap-0.5" href={BROWSER_DEMO_URL}>
+              <span>Play the Demo</span>
+              <span className="font-sans text-[0.68rem] normal-case tracking-normal text-mist">A short adventure in your browser</span>
+            </a>
+          )}
           {error && <p className="rounded-md border border-ember/40 bg-ember/10 px-3 py-2 text-sm text-ember">{error}</p>}
         </motion.div>
 
         <AnimatePresence>
-          {showSaves && saves.length > 1 && (
+          {playable && showSaves && saves.length > 1 && (
             <motion.ul
               className="mt-6 w-full max-w-xl space-y-2.5 text-left"
               initial={{ opacity: 0, y: 8 }}
