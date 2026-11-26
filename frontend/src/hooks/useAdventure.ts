@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, isUnreachable } from "../api/client";
-import type { Adventure, DiceRoll, Fate, GameRules, HeroBuild, HeroSheet, ProviderStatus, SaveSummary, TurnResponse } from "../api/types";
+import { MAX_TALE_FILE_BYTES, api, isUnreachable } from "../api/client";
+import type { AccountInfo, Adventure, DiceRoll, Fate, GameRules, HeroBuild, HeroSheet, ProviderStatus, SaveSummary, TurnResponse } from "../api/types";
 
 export interface TurnFeedback {
   turnNumber: number;
@@ -26,6 +26,7 @@ export function useAdventure() {
   const [adventure, setAdventure] = useState<Adventure | null>(null);
   const [saves, setSaves] = useState<SaveSummary[]>([]);
   const [providers, setProviders] = useState<ProviderStatus | null>(null);
+  const [account, setAccount] = useState<AccountInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setErrorMessage] = useState<string | null>(null);
@@ -51,6 +52,8 @@ export function useAdventure() {
   const retryConnection = useCallback(() => {
     setError(null);
     refreshSaves();
+    // Only for showing who is signed in; the game works the same without it.
+    api.me().then(setAccount).catch(() => setAccount(null));
     api.health()
       .then((status) => {
         setProviders(status);
@@ -174,6 +177,51 @@ export function useAdventure() {
       refreshSaves();
     },
     [refreshSaves],
+  );
+
+  /** Downloads a tale as one file, named after the save. */
+  const exportSave = useCallback(
+    async (adventureId: string, saveName: string) => {
+      setError(null);
+      try {
+        const file = await api.exportSave(adventureId);
+        const slug = saveName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "tale";
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(file);
+        link.download = `eldoria-${slug}.json`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        // Give the browser a moment to start the download before the file's address is released.
+        window.setTimeout(() => URL.revokeObjectURL(link.href), 10_000);
+      } catch (e) {
+        fail(e);
+      }
+    },
+    [fail, setError],
+  );
+
+  /** Adds an exported tale file as a new save. Resolves true when it was imported. */
+  const importSave = useCallback(
+    async (file: File) => {
+      setError(null);
+      if (file.size > MAX_TALE_FILE_BYTES) {
+        setError(`That file is too large to be a tale (the limit is ${MAX_TALE_FILE_BYTES / (1024 * 1024)} MB).`);
+        return false;
+      }
+      setLoading(true);
+      try {
+        await api.importSave(await file.text());
+        refreshSaves();
+        return true;
+      } catch (e) {
+        fail(e);
+        return false;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [fail, refreshSaves, setError],
   );
 
   /** Runs one turn-shaped request and shows its result like any turn. */
@@ -316,6 +364,7 @@ export function useAdventure() {
     adventure,
     saves,
     providers,
+    account,
     connection,
     loading,
     submitting,
@@ -328,6 +377,8 @@ export function useAdventure() {
     openSave,
     renameSave,
     deleteSave,
+    exportSave,
+    importSave,
     submitAction,
     retellTurn,
     setRules,

@@ -1,5 +1,5 @@
 import { backendFetch, remoteBackend } from "./connection";
-import type { Adventure, CreationOptions, Fate, GameRules, HeroBuild, HeroDraftResponse, HeroSheet, ImageReference, LatestAdventure, ProviderStatus, SaveSummary, TurnResponse, VoiceCatalog } from "./types";
+import type { AccountInfo, Adventure, CreationOptions, Fate, GameRules, HeroBuild, HeroDraftResponse, HeroSheet, ImageReference, LatestAdventure, ProviderStatus, SaveSummary, TurnResponse, VoiceCatalog } from "./types";
 
 const CAMPAIGN_ID = "whispering_darkness";
 
@@ -15,7 +15,11 @@ export function isUnreachable(error: unknown): boolean {
   return remoteBackend && error instanceof ApiError && error.unreachable;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+/** The largest tale file the server accepts (see MAX_IMPORT_BYTES in backend/app/main.py). */
+export const MAX_TALE_FILE_BYTES = 8 * 1024 * 1024;
+
+/** Sends a request and returns the response once it succeeded; every failure becomes an ApiError. */
+async function send(path: string, init?: RequestInit): Promise<Response> {
   let response: Response;
   try {
     response = await backendFetch(path, {
@@ -35,8 +39,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       /* keep status text */
     }
+    if (response.status === 401) {
+      // No signed-in player came with the request. The hosted page treats this like a lapsed sign-in,
+      // the same as a server it cannot reach; local play shows the server's explanation.
+      throw new ApiError(401, remoteBackend ? "Your sign-in to the private server has ended. Sign in again, then retry." : detail, remoteBackend);
+    }
     throw new ApiError(response.status, detail);
   }
+  return response;
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await send(path, init);
   if (response.status === 204) return undefined as T;
   if (remoteBackend && !response.headers.get("Content-Type")?.includes("application/json")) {
     throw new ApiError(502, "Your private server did not return game data. Sign in to the server and retry.", true);
@@ -76,6 +90,11 @@ export const api = {
   renameSave: (id: string, name: string) =>
     request<void>(`/api/adventures/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
   deleteSave: (id: string) => request<void>(`/api/adventures/${id}`, { method: "DELETE" }),
+  /** The whole tale as one JSON file, to keep or to import elsewhere. */
+  exportSave: (id: string) => send(`/api/adventures/${id}/export`).then((response) => response.blob()),
+  /** Adds an exported tale as a new save of this player's. Never replaces an existing one. */
+  importSave: (fileText: string) => request<Adventure>("/api/adventures/import", { method: "POST", body: fileText }),
+  me: () => request<AccountInfo>("/api/me"),
   turn: (id: string, actionText: string, fate: Fate | null = null) =>
     request<TurnResponse>(`/api/adventures/${id}/turns`, {
       method: "POST",

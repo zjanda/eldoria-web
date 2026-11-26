@@ -110,6 +110,9 @@ export default function App() {
               onOpen={(id) => withUnlock(() => game.openSave(id))()}
               onRename={game.renameSave}
               onDelete={game.deleteSave}
+              onExport={game.exportSave}
+              onImport={game.importSave}
+              account={game.account}
               onNew={(kind) => {
                 game.clearError();
                 setCreating(kind);
