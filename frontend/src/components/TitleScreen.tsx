@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { remoteBackend } from "../api/connection";
-import type { ProviderStatus, SaveSummary } from "../api/types";
+import type { AccountInfo, ProviderStatus, SaveSummary } from "../api/types";
 import { SceneArt } from "./scene/SceneArt";
 
 interface TitleScreenProps {
@@ -12,6 +12,12 @@ interface TitleScreenProps {
   onOpen: (adventureId: string) => void;
   onRename: (adventureId: string, name: string) => void;
   onDelete: (adventureId: string) => void;
+  /** Downloads a tale as one file. */
+  onExport: (adventureId: string, name: string) => void;
+  /** Adds an exported tale file as a new save; resolves true when it was imported. */
+  onImport: (file: File) => Promise<boolean>;
+  /** Who is signed in, when the server keeps each player's tales apart. */
+  account: AccountInfo | null;
   /** "sandbox": an open tale with heroes of the player's own making. "premade": The Whispering Darkness. */
   onNew: (kind: "sandbox" | "premade") => void;
   /** Hosted demo: whether the private server answered. Only what works is shown. */
@@ -31,11 +37,18 @@ function timeAgo(iso: string) {
   return days === 1 ? "yesterday" : `${days} days ago`;
 }
 
-export function TitleScreen({ saves, providers, loading, error, onOpen, onRename, onDelete, onNew, connection }: TitleScreenProps) {
+export function TitleScreen({ saves, providers, loading, error, onOpen, onRename, onDelete, onExport, onImport, account, onNew, connection }: TitleScreenProps) {
   // The hosted build is a demo: without the private server none of the game's buttons can work, so they are hidden.
   const playable = !remoteBackend || connection === "online";
   const latest = playable ? saves[0] ?? null : null;
   const [showSaves, setShowSaves] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const signedInAs = account?.account_mode === "access" ? account.email : null;
+  const importChosenFile = async (input: HTMLInputElement) => {
+    const file = input.files?.[0];
+    input.value = ""; // choosing the same file again still imports it again
+    if (file && (await onImport(file))) setShowSaves(true);
+  };
   return (
     <div className="relative h-full overflow-hidden">
       <SceneArt artKey="hollow_gate" visualState="default" />
@@ -108,7 +121,7 @@ export function TitleScreen({ saves, providers, loading, error, onOpen, onRename
               </span>
             </button>
           )}
-          {playable && saves.length > 1 && (
+          {playable && saves.length > 0 && (
             <button className="btn-ghost py-3 font-display uppercase tracking-[0.2em]" onClick={() => setShowSaves((v) => !v)} aria-expanded={showSaves}>
               Saved Tales ({saves.length})
             </button>
@@ -123,6 +136,22 @@ export function TitleScreen({ saves, providers, loading, error, onOpen, onRename
             <span className="text-[0.68rem] text-mist">A written story to play through</span>
           </button>
           {latest && <p className="text-[0.7rem] text-mist/70">A new tale is a separate story; your other saves are kept.</p>}
+          <button
+            className="text-[0.72rem] text-mist underline-offset-2 hover:text-gold hover:underline"
+            onClick={() => fileInput.current?.click()}
+            disabled={loading}
+            title="Add a tale from a file made with Export"
+          >
+            Import a tale from a file
+          </button>
+          <input
+            ref={fileInput}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            aria-label="Tale file to import"
+            onChange={(event) => void importChosenFile(event.currentTarget)}
+          />
           </>}
           {remoteBackend && connection === "offline" && (
             <a className="btn-gold flex-col !gap-0.5" href={BROWSER_DEMO_URL}>
@@ -134,7 +163,7 @@ export function TitleScreen({ saves, providers, loading, error, onOpen, onRename
         </motion.div>
 
         <AnimatePresence>
-          {playable && showSaves && saves.length > 1 && (
+          {playable && showSaves && saves.length > 0 && (
             <motion.ul
               className="mt-6 w-full max-w-xl space-y-2.5 text-left"
               initial={{ opacity: 0, y: 8 }}
@@ -142,7 +171,7 @@ export function TitleScreen({ saves, providers, loading, error, onOpen, onRename
               exit={{ opacity: 0, y: 8 }}
             >
               {saves.map((save) => (
-                <SaveRow key={save.adventure_id} save={save} disabled={loading} onOpen={onOpen} onRename={onRename} onDelete={onDelete} />
+                <SaveRow key={save.adventure_id} save={save} disabled={loading} onOpen={onOpen} onRename={onRename} onDelete={onDelete} onExport={onExport} />
               ))}
             </motion.ul>
           )}
@@ -151,10 +180,14 @@ export function TitleScreen({ saves, providers, loading, error, onOpen, onRename
 
       </div>
 
-      {providers && (
-        <p className="absolute bottom-4 left-0 right-0 z-10 text-center text-[0.7rem] text-mist/60">
-          Dungeon Master: {providers.narrative_provider === "mock" ? "Offline storyteller" : providers.narrative_provider} · Artwork:{" "}
-          {providers.images_enabled ? providers.image_provider : "illustrated fallbacks"}
+      {(providers || signedInAs) && (
+        <p className="absolute bottom-4 left-0 right-0 z-10 px-4 text-center text-[0.7rem] text-mist/60">
+          {signedInAs && <span className="break-all">Signed in as {signedInAs}</span>}
+          {signedInAs && providers && " · "}
+          {providers && <>
+            Dungeon Master: {providers.narrative_provider === "mock" ? "Offline storyteller" : providers.narrative_provider} · Artwork:{" "}
+            {providers.images_enabled ? providers.image_provider : "illustrated fallbacks"}
+          </>}
         </p>
       )}
     </div>
@@ -167,9 +200,10 @@ interface SaveRowProps {
   onOpen: (adventureId: string) => void;
   onRename: (adventureId: string, name: string) => void;
   onDelete: (adventureId: string) => void;
+  onExport: (adventureId: string, name: string) => void;
 }
 
-function SaveRow({ save, disabled, onOpen, onRename, onDelete }: SaveRowProps) {
+function SaveRow({ save, disabled, onOpen, onRename, onDelete, onExport }: SaveRowProps) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(save.name);
   const [confirming, setConfirming] = useState(false);
@@ -223,6 +257,9 @@ function SaveRow({ save, disabled, onOpen, onRename, onDelete }: SaveRowProps) {
         <div className="flex shrink-0 flex-col items-end gap-1.5">
           <button className="btn-gold !px-3 !py-1.5 text-xs" disabled={disabled} onClick={() => onOpen(save.adventure_id)}>
             Play
+          </button>
+          <button className="text-[0.7rem] text-mist hover:text-gold" disabled={disabled} onClick={() => onExport(save.adventure_id, save.name)} title="Download this tale as a file you can keep or import later">
+            Export
           </button>
           {confirming ? (
             <span className="flex items-center gap-2 text-[0.7rem]">

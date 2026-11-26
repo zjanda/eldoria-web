@@ -527,6 +527,12 @@ export interface LatestAdventure {
   updated_at: string;
 }
 
+/** Whose saves these are. `email` is set only when the server keeps each player's tales apart ("access"). */
+export interface AccountInfo {
+  account_mode: "shared" | "access";
+  email: string | null;
+}
+
 export interface ProviderStatus {
   narrative_provider: string;
   image_provider: string;
