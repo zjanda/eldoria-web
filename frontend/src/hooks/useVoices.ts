@@ -9,14 +9,23 @@ export interface VoiceOptions {
   cloudAvailable: boolean;
 }
 
-/** Loads device + cloud voice catalogues and keeps a sensible narrator voice selected. */
-export function useVoices(settings: Settings, update: (patch: Partial<Settings>) => void): VoiceOptions {
+/**
+ * Loads device + cloud voice catalogues and keeps a sensible narrator voice selected.
+ * `player`: who is signed in (null when nobody is, on a server with accounts). The server's voices are
+ * asked for again when it changes, and nothing is decided about AI voices while signed out.
+ */
+export function useVoices(settings: Settings, update: (patch: Partial<Settings>) => void, player: string | null = ""): VoiceOptions {
   const [deviceVoices, setDeviceVoices] = useState<NarratorVoice[]>([]);
   const [cloudVoices, setCloudVoices] = useState<NarratorVoice[]>([]);
   const [cloudAvailable, setCloudAvailable] = useState(false);
+  const signedOut = player === null;
 
   useEffect(() => {
     narrator.loadDeviceVoices().then(setDeviceVoices);
+  }, []);
+
+  useEffect(() => {
+    if (signedOut) return;
     api
       .voices()
       .then((catalog) => {
@@ -35,7 +44,7 @@ export function useVoices(settings: Settings, update: (patch: Partial<Settings>)
         );
       })
       .catch(() => undefined);
-  }, []);
+  }, [signedOut, player]);
 
   useEffect(() => {
     if (!deviceVoices.length) return;
@@ -63,11 +72,12 @@ export function useVoices(settings: Settings, update: (patch: Partial<Settings>)
 
   useEffect(() => {
     // Fall back to device voices if AI voices were chosen but are not configured.
+    if (signedOut) return; // the server's voices are unknown until the player signs in
     if (settings.narratorSource === "cloud" && !cloudAvailable && cloudVoices.length === 0) {
       const timer = window.setTimeout(() => update({ narratorSource: "device" }), 2000);
       return () => window.clearTimeout(timer);
     }
-  }, [settings.narratorSource, cloudAvailable, cloudVoices.length, update]);
+  }, [signedOut, settings.narratorSource, cloudAvailable, cloudVoices.length, update]);
 
   return { deviceVoices, cloudVoices, cloudAvailable };
 }
