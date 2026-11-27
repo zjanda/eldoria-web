@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { MAX_TALE_FILE_BYTES, api, isSignedOut, isUnreachable } from "../api/client";
+import { ApiError, MAX_TALE_FILE_BYTES, api, isSignedOut, isUnreachable } from "../api/client";
 import type { AccountInfo, Adventure, DiceRoll, Fate, GameRules, HeroBuild, HeroSheet, ProviderStatus, SaveSummary, TurnResponse } from "../api/types";
 
 export interface TurnFeedback {
@@ -9,6 +9,9 @@ export interface TurnFeedback {
   degraded: boolean;
   degradedReason: string;
 }
+
+// After the trial's last move, how long the turn's story shows before "What comes next" opens.
+const TRIAL_END_DELAY_MS = 4000;
 
 // The tale open in this tab, so a reloaded page returns to it instead of the title screen.
 const OPEN_TALE_KEY = "eldoria.openTale";
@@ -58,10 +61,26 @@ export function useAdventure() {
     accountRef.current = next;
     setAccount(next);
   }, []);
+  /** The trial's "What comes next" screen: opened by the trial indicator, or when the trial runs out. */
+  const [trialScreenOpen, setTrialScreenOpen] = useState(false);
+  /** Asks the server for the account again (the trial's numbers live there, not in the page). */
+  const refreshTrial = useCallback(() => {
+    if (!hasOwnAccounts(accountRef.current)) return Promise.resolve(accountRef.current);
+    return api.me().then((me) => {
+      applyAccount(me);
+      return me;
+    }).catch(() => accountRef.current);
+  }, [applyAccount]);
 
   // Every failure in this hook is reported through here, so an unreachable server never shows an error.
   const fail = useCallback((e: unknown) => {
     const current = accountRef.current;
+    if (e instanceof ApiError && e.code === "trial_ended") {
+      // The server says the trial is used up: show what comes next instead of an error.
+      void refreshTrial();
+      setTrialScreenOpen(true);
+      return;
+    }
     if (isSignedOut(e) && hasOwnAccounts(current) && current) {
       // The session lapsed (expired, signed out elsewhere, or switched off). Back to the sign-in screen;
       // the open tale is remembered and typed actions are kept in this browser, so nothing is lost.
@@ -78,7 +97,7 @@ export function useAdventure() {
       return;
     }
     setErrorMessage((e as Error).message);
-  }, [applyAccount]);
+  }, [applyAccount, refreshTrial]);
   const setError = useCallback((message: string | null) => setErrorMessage(message), []);
 
   const refreshSaves = useCallback(() => {
@@ -368,6 +387,13 @@ export function useAdventure() {
         degraded: response.degraded,
         degradedReason: response.degraded_reason ?? "",
       });
+      if (accountRef.current?.trial) {
+        // A move was counted: update the trial indicator. After the last one, show what comes next once
+        // the player has had a moment to read how the turn turned out.
+        void refreshTrial().then((me) => {
+          if (me?.trial?.ended) window.setTimeout(() => setTrialScreenOpen(true), TRIAL_END_DELAY_MS);
+        });
+      }
       return true;
     } catch (e) {
       fail(e);
@@ -515,6 +541,9 @@ export function useAdventure() {
     paintArt,
     chooseArt,
     exitToTitle,
+    trialScreenOpen,
+    openTrialScreen: () => setTrialScreenOpen(true),
+    closeTrialScreen: () => setTrialScreenOpen(false),
     signInWithGoogle,
     signInWithPassword,
     register,
