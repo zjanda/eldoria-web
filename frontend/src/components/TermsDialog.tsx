@@ -42,7 +42,9 @@ export function TermsDialog({ mode, onClose }: TermsDialogProps) {
         </header>
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5 text-left text-sm leading-relaxed text-parchment/85 sm:px-8">
           <Section title="What Eldoria is">
-            Eldoria is a story game run by one person as a personal project. It is free to play. It runs on a private
+            Eldoria is a story game run by one person as a personal project. New accounts can try it for free, for a
+            limited number of moves. A paid subscription may be offered later; it would always be your choice, and
+            nothing is charged today. It runs on a private
             home server, which may be offline at times, and it may change or stop without notice.
           </Section>
           <Section title="What is stored">

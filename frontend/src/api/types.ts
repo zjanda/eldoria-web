@@ -553,7 +553,18 @@ export interface AccountInfo {
   unverified_may_play?: boolean;
   /** Password mode: the shortest password the server accepts. */
   password_min_length?: number;
+  /** "daily" or "trial": how the free plan is limited when the paywall is on. */
+  free_model?: string;
+  /** The signed-in account's one-time trial; null when none applies (subscribers, paywall off, daily model). */
+  trial?: TrialInfo | null;
+  /** The survey link for the trial's end screen. */
+  survey_url?: string | null;
+  /** The subscription offer there: "coming_soon" (shown, disabled) or "hidden". */
+  subscriptions?: string;
 }
+
+export type { TrialInfo } from "../lib/trial";
+import type { TrialInfo } from "../lib/trial";
 
 export interface ProviderStatus {
   narrative_provider: string;

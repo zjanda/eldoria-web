@@ -5,6 +5,7 @@ import { HeroForge, clearForgeDraft } from "./components/creation/HeroForge";
 import { GameScreen } from "./components/GameScreen";
 import { forgetGoogleAutoSelect } from "./components/GoogleSignInButton";
 import { TitleScreen } from "./components/TitleScreen";
+import { TrialIndicator, TrialScreen } from "./components/TrialScreen";
 import { hasOwnAccounts, signedOutOfAccount, useAdventure } from "./hooks/useAdventure";
 import { useSettings } from "./hooks/useSettings";
 import { useVoices } from "./hooks/useVoices";
@@ -120,7 +121,9 @@ export default function App() {
               account={game.account}
               onNew={(kind) => {
                 game.clearError();
-                setCreating(kind);
+                // After the trial a new tale cannot start: show what comes next rather than a form that would fail.
+                if (game.account?.trial?.ended) game.openTrialScreen();
+                else setCreating(kind);
               }}
               connection={game.connection}
               onRetry={game.retryConnection}
@@ -138,6 +141,13 @@ export default function App() {
             />
           </motion.div>
         )}
+      </AnimatePresence>
+      {/* The one-time trial: a small counter while signed in, and "What comes next" on demand or at the end. */}
+      {!needsSignIn && game.account?.trial && !game.trialScreenOpen && (
+        <TrialIndicator trial={game.account.trial} onOpen={game.openTrialScreen} />
+      )}
+      <AnimatePresence>
+        {game.trialScreenOpen && game.account && <TrialScreen offer={game.account} onClose={game.closeTrialScreen} />}
       </AnimatePresence>
     </MotionConfig>
   );
