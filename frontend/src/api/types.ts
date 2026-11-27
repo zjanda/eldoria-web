@@ -336,6 +336,9 @@ export interface GameRules {
   rest_limits: boolean;
   learn_by_doing: boolean;
   house_rules: string[];
+  /** Content switches, both off by default. Sexual content needs a confirmed age with public accounts. */
+  graphic_violence?: boolean;
+  sexual_content?: boolean;
 }
 
 export type EntryKind = "narration" | "dialogue" | "player" | "roll" | "combat" | "system";
@@ -561,6 +564,10 @@ export interface AccountInfo {
   survey_url?: string | null;
   /** The subscription offer there: "coming_soon" (shown, disabled) or "hidden". */
   subscriptions?: string;
+  /** The owner's ELDORIA_CONTENT_SWITCHES: "both", "violence" or "none" (which content switches exist here). */
+  content_switches?: string;
+  /** True when no age confirmation is needed (shared, access) or the account confirmed being 18 or older. */
+  adult_confirmed?: boolean;
 }
 
 export type { TrialInfo } from "../lib/trial";

@@ -10,7 +10,7 @@ interface TermsDialogProps {
 
 /** Shown where the owner's contact details belong until he fills them in. */
 const CONTACT_LINE = "[Contact details to be added by the owner of this server]";
-const LAST_UPDATED = "November 26, 2026";
+const LAST_UPDATED = "November 27, 2026";
 
 /**
  * Terms and privacy, in plain words. A draft for the owner to review; it is not legal advice.
@@ -64,8 +64,20 @@ export function TermsDialog({ mode, onClose }: TermsDialogProps) {
               </>
             )}{" "}
             It also keeps your tales (what you type, the story, your heroes), the pictures, music, sounds and narrator
-            audio made for them, and a count of how many turns, pictures, music pieces and sounds you start each day. A
-            cookie keeps you signed in on this device for up to 30 days after you last opened the game.
+            audio made for them, and a count of how many turns, pictures, music pieces and sounds you start each day. If
+            you confirm that you are 18 or older, it keeps the time you confirmed it. A cookie keeps you signed in on
+            this device for up to 30 days after you last opened the game.
+          </Section>
+          <Section title="Privacy of your tales">
+            Your tales are stored on our server so you can continue them. We do not read them. We will only open a tale
+            if you ask us to, if we must investigate a report of abuse, or if the law requires it. We do not sell your
+            tales or use them to train AI.
+          </Section>
+          <Section title="Mature content">
+            Each tale has content switches, and they are off by default. Graphic violence and sexual content appear
+            only if you turn them on for that tale. Turning on sexual content requires confirming that you are 18 or
+            older. Sexual content involving minors or real people is never allowed, whatever the switches say.
+            Pictures never show sexual content.
           </Section>
           <Section title="Content made by AI">
             The story, pictures, music, sounds and voices are made by AI (artificial intelligence) models. They can be

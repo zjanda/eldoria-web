@@ -1,7 +1,10 @@
-import { motion } from "framer-motion";
-import { useState, type ReactNode } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { GameRules } from "../../api/types";
+import type { AccountInfo, GameRules } from "../../api/types";
+import {
+  ADULT_STATEMENT, PICTURES_NOTE, SWITCH_LABELS, availableSwitches, switchNote, toggleAction, type ContentSwitch,
+} from "../../lib/contentSwitches";
 
 export const DIFFICULTIES: { level: number; name: string; summary: string }[] = [
   { level: 1, name: "Imagination", summary: "Your word is final. Powers are never resized, nothing forces a fight, and nothing can bring a hero down." },
@@ -11,18 +14,30 @@ export const DIFFICULTIES: { level: number; name: string; summary: string }[] = 
   { level: 5, name: "Deathmarch", summary: "Every point of power is paid for. Foes hit far harder, and defeat leaves you at 1 HP with nothing left." },
 ];
 
-export const DEFAULT_RULES: GameRules = { difficulty: 3, dice: true, resource_costs: true, rest_limits: true, learn_by_doing: true, house_rules: [] };
+export const DEFAULT_RULES: GameRules = {
+  difficulty: 3, dice: true, resource_costs: true, rest_limits: true, learn_by_doing: true, house_rules: [],
+  graphic_violence: false, sexual_content: false,
+};
 
 const toLines = (text: string) => text.split("\n").map((line) => line.trim()).filter(Boolean);
+
+/** What the "Content" group needs: who is playing (which switches exist, whether their age is confirmed). */
+export interface ContentControls {
+  account: AccountInfo | null;
+  /** Records that the player is 18 or older. Resolves true once the server accepted it. */
+  onConfirmAdult: () => Promise<boolean>;
+}
 
 interface RulesFieldsProps {
   rules: GameRules;
   wishes: string[];
   onChange: (rules: GameRules, wishes: string[]) => void;
+  /** Omitted: no "Content" group is shown. */
+  content?: ContentControls;
 }
 
 /** The rules of a tale, all of them the player's to reshape: difficulty, dice, costs, rest, and rules in their own words. */
-export function RulesFields({ rules, wishes, onChange }: RulesFieldsProps) {
+export function RulesFields({ rules, wishes, onChange, content }: RulesFieldsProps) {
   // Free text is kept as typed (blank lines and all) and split into lines only when it is handed on.
   const [houseText, setHouseText] = useState(rules.house_rules.join("\n"));
   const [wishText, setWishText] = useState(wishes.join("\n"));
@@ -68,6 +83,8 @@ export function RulesFields({ rules, wishes, onChange }: RulesFieldsProps) {
           note={rules.learn_by_doing ? "Name a power a hero lacks and it becomes theirs; the game sets its cost." : "Heroes can only use what is on their sheet."} />
       </div>
 
+      {content && <ContentFields rules={rules} controls={content} onChange={(changes) => set(changes)} />}
+
       <label className="block">
         <span className="label mb-1 block">Your own rules</span>
         <textarea className="input resize-y" rows={3} value={houseText} placeholder={"One per line, in your own words.\nMagic always has a price.\nNo one dies unless I say so."}
@@ -82,6 +99,131 @@ export function RulesFields({ rules, wishes, onChange }: RulesFieldsProps) {
         <span className="mt-1 block text-[0.72rem] text-mist">Standing direction for the storyteller. Asking for peace here means the story never starts a fight you did not pick.</span>
       </label>
     </div>
+  );
+}
+
+/**
+ * The tale's content switches. Both are off unless the player turns them on; whatever the owner made unavailable
+ * is not shown. Turning on sexual content without a confirmed age first asks the player to confirm being 18 or older.
+ */
+function ContentFields({ rules, controls, onChange }: { rules: GameRules; controls: ContentControls; onChange: (changes: Partial<GameRules>) => void }) {
+  const [confirming, setConfirming] = useState(false);
+  const available = availableSwitches(controls.account);
+  if (!available.graphic_violence && !available.sexual_content) return null;
+  const violence = rules.graphic_violence ?? false;
+  const sexual = rules.sexual_content ?? false;
+  const flip = (name: ContentSwitch, on: boolean) => {
+    if (toggleAction(name, on, controls.account) === "confirm") setConfirming(true);
+    else onChange(name === "graphic_violence" ? { graphic_violence: on } : { sexual_content: on });
+  };
+  return (
+    <section aria-labelledby="content-switches-heading">
+      <p id="content-switches-heading" className="label mb-2">Content</p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {available.graphic_violence && (
+          <Toggle label={SWITCH_LABELS.graphic_violence} on={violence} onChange={(on) => flip("graphic_violence", on)}
+            note={switchNote("graphic_violence", violence)} />
+        )}
+        {available.sexual_content && (
+          <Toggle label={SWITCH_LABELS.sexual_content} on={sexual} onChange={(on) => flip("sexual_content", on)}
+            note={switchNote("sexual_content", sexual)} />
+        )}
+      </div>
+      <p className="mt-2 text-[0.72rem] leading-snug text-mist">{PICTURES_NOTE}</p>
+      <AnimatePresence>
+        {confirming && (
+          <AdultConfirmDialog
+            onConfirm={async () => {
+              const recorded = await controls.onConfirmAdult();
+              if (recorded) {
+                setConfirming(false);
+                onChange({ sexual_content: true });
+              }
+              return recorded;
+            }}
+            onCancel={() => setConfirming(false)}
+          />
+        )}
+      </AnimatePresence>
+    </section>
+  );
+}
+
+interface AdultConfirmDialogProps {
+  /** Resolves true once the confirmation was recorded. */
+  onConfirm: () => Promise<boolean>;
+  onCancel: () => void;
+}
+
+/** A small age confirmation: Confirm records it (once per account), Cancel leaves sexual content off. */
+export function AdultConfirmDialog({ onConfirm, onCancel }: AdultConfirmDialogProps) {
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    // Focus starts on Cancel, so pressing Enter by accident never confirms an age. Moved once the dialog is in
+    // the page (focusing during the same render pass did not always stick).
+    const timer = window.setTimeout(() => cancelRef.current?.focus(), 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    // Escape cancels, wherever keyboard focus is, like the other dialogs.
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busy) {
+        event.stopPropagation();
+        onCancel();
+      }
+    };
+    window.addEventListener("keydown", onEscape);
+    return () => window.removeEventListener("keydown", onEscape);
+  }, [busy, onCancel]);
+
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Tab") return;
+    // Keep keyboard focus inside the dialog while it is open.
+    const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLButtonElement>("button:not([disabled])") ?? []);
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
+  const confirm = async () => {
+    setBusy(true);
+    setFailed(false);
+    const recorded = await onConfirm();
+    setBusy(false);
+    if (!recorded) setFailed(true);
+  };
+
+  return createPortal(
+    <motion.div className="fixed inset-0 z-[70] flex items-center justify-center bg-ink/90 p-4 backdrop-blur-sm" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      role="dialog" aria-modal="true" aria-labelledby="adult-confirm-title" aria-describedby="adult-confirm-text" ref={dialogRef} onKeyDown={onKeyDown}>
+      <div className="w-full max-w-md rounded-xl border border-gold/20 bg-night-950 p-5">
+        <h2 id="adult-confirm-title" className="font-display text-xl text-gold-soft">Sexual content (18+)</h2>
+        <div id="adult-confirm-text" className="mt-3 space-y-2 text-sm text-parchment/90">
+          <p className="font-serif italic">{ADULT_STATEMENT}</p>
+          <p className="text-mist">
+            You confirm this once for your account. Sexual content then stays off in each tale until you turn it on, and it is never shown in pictures.
+          </p>
+        </div>
+        <div className="mt-4 flex gap-3">
+          <button className="btn-gold !py-2" disabled={busy} onClick={confirm}>{busy ? "Confirming…" : "Confirm"}</button>
+          <button className="btn-ghost" disabled={busy} onClick={onCancel} ref={cancelRef}>Cancel</button>
+        </div>
+        {failed && <p role="alert" className="mt-3 text-ember">Your confirmation could not be recorded. Please try again.</p>}
+      </div>
+    </motion.div>,
+    document.body,
   );
 }
 
@@ -104,10 +246,11 @@ interface RulesPanelProps {
   /** Resolves true when the server accepted the change. */
   onSave: (rules: GameRules, wishes: string[]) => Promise<boolean>;
   onClose: () => void;
+  content?: ContentControls;
 }
 
 /** Change the rules in the middle of a tale. The change can be undone like any other step. */
-export function RulesPanel({ rules, wishes, onSave, onClose }: RulesPanelProps) {
+export function RulesPanel({ rules, wishes, onSave, onClose, content }: RulesPanelProps) {
   const [draft, setDraft] = useState<{ rules: GameRules; wishes: string[] }>({ rules, wishes });
   const [saving, setSaving] = useState(false);
   const save = async () => {
@@ -123,7 +266,8 @@ export function RulesPanel({ rules, wishes, onSave, onClose }: RulesPanelProps) 
         <h2 className="font-display text-xl tracking-wide text-parchment">They are yours to change</h2>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        <RulesFields rules={draft.rules} wishes={draft.wishes} onChange={(nextRules, nextWishes) => setDraft({ rules: nextRules, wishes: nextWishes })} />
+        <RulesFields rules={draft.rules} wishes={draft.wishes} content={content}
+          onChange={(nextRules, nextWishes) => setDraft({ rules: nextRules, wishes: nextWishes })} />
       </div>
       <footer className="flex shrink-0 items-center justify-end gap-3 border-t border-gold/15 px-4 py-3">
         <button className="btn-ghost" onClick={onClose} disabled={saving}>Cancel</button>
