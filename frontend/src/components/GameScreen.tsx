@@ -14,7 +14,7 @@ import { DiceOverlay, featuredRolls } from "./dice/DiceOverlay";
 import { ChronicleViewer } from "./narrative/ChronicleViewer";
 import { NarrativeLog } from "./narrative/NarrativeLog";
 import { CharacterCard } from "./panels/CharacterCard";
-import { DEFAULT_RULES, DIFFICULTIES, RetellDialog, RulesPanel } from "./rules/RulesPanel";
+import { DEFAULT_RULES, DIFFICULTIES, RetellDialog, RulesPanel, type ContentControls } from "./rules/RulesPanel";
 import { SidePanels } from "./panels/SidePanels";
 import { SceneView } from "./scene/SceneView";
 import { SettingsMenu } from "./settings/SettingsMenu";
@@ -45,6 +45,8 @@ interface GameScreenProps {
   onChooseArt: (target: ArtTarget, keep: "new" | "old") => Promise<void>;
   onExit: () => void;
   onDismissError: () => void;
+  /** The tale's content switches in the rules panel: which exist here, and the age confirmation. */
+  content?: ContentControls;
 }
 
 /** Why the simple keyword reader handled a turn instead of the AI Dungeon Master. */
@@ -74,6 +76,7 @@ export function GameScreen({
   onChooseArt,
   onExit,
   onDismissError,
+  content,
 }: GameScreenProps) {
   const [artTarget, setArtTarget] = useState<ArtTarget | null>(null);
   const [phase, setPhase] = useState<Phase>("idle");
@@ -385,7 +388,7 @@ export function GameScreen({
       </AnimatePresence>
 
       <AnimatePresence>
-        {rulesOpen && <RulesPanel key="rules" rules={rules} wishes={adventure.wishes ?? []} onSave={onSetRules} onClose={() => setRulesOpen(false)} />}
+        {rulesOpen && <RulesPanel key="rules" rules={rules} wishes={adventure.wishes ?? []} onSave={onSetRules} onClose={() => setRulesOpen(false)} content={content} />}
         {retelling && (
           <RetellDialog key="retell" action={retelling.text} busy={submitting} error={error} onClose={() => setRetelling(null)}
             onRetell={(direction, remember) => { narrator.stop(); return onRetell(retelling.id, direction, remember); }} />

@@ -9,6 +9,7 @@ import { TrialIndicator, TrialScreen } from "./components/TrialScreen";
 import { hasOwnAccounts, signedOutOfAccount, useAdventure } from "./hooks/useAdventure";
 import { useSettings } from "./hooks/useSettings";
 import { useVoices } from "./hooks/useVoices";
+import { withoutUnavailableSwitches } from "./lib/contentSwitches";
 import { narrator } from "./lib/narrator";
 
 const CREATING_KEY = "eldoria.creating";
@@ -46,6 +47,8 @@ export default function App() {
   // Google mode, signed out (or the session lapsed): only the title screen with sign-in. Which creation
   // screen was open is kept, and its typing is saved in this browser, so signing in again returns to it.
   const needsSignIn = signedOutOfAccount(game.account);
+  // The tale's content switches: which ones this server offers, and the age confirmation they may need.
+  const contentControls = { account: game.account, onConfirmAdult: game.confirmAdult };
 
   return (
     <MotionConfig reducedMotion={settings.reduceMotion ? "always" : "user"}>
@@ -71,6 +74,7 @@ export default function App() {
               onChooseArt={game.chooseArt}
               onExit={game.exitToTitle}
               onDismissError={game.clearError}
+              content={contentControls}
             />
           </motion.div>
         ) : !needsSignIn && creating === "sandbox" ? (
@@ -78,9 +82,10 @@ export default function App() {
             <HeroForge
               busy={game.loading}
               error={game.error}
+              content={contentControls}
               onBegin={async (sheets, premise, rules, wishes) => {
                 narrator.unlock();
-                if (await game.startSandbox(sheets, premise, rules, wishes)) {
+                if (await game.startSandbox(sheets, premise, withoutUnavailableSwitches(rules, game.account), wishes)) {
                   clearForgeDraft(); // the party is in its tale now; the next New Tale starts empty
                   setCreating(null);
                 }

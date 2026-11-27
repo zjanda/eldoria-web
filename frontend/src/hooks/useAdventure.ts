@@ -190,6 +190,21 @@ export function useAdventure() {
     api.me().then(applyAccount).catch(() => undefined);
   }, [applyAccount]);
 
+  /**
+   * The player confirms being 18 or older (google and password mode), so a tale's sexual content can be
+   * turned on. Resolves true once the server recorded it; on a refusal the reason is left in `error`.
+   */
+  const confirmAdult = useCallback(async () => {
+    setError(null);
+    try {
+      applyAccount(await api.confirmAdult());
+      return true;
+    } catch (e) {
+      fail(e);
+      return false;
+    }
+  }, [applyAccount, fail, setError]);
+
   /** Local test servers only: sign in as any address. */
   const fakeSignIn = useCallback(async (email: string, name: string) => {
     setLoading(true);
@@ -549,6 +564,7 @@ export function useAdventure() {
     register,
     adoptSession: signedIn,
     refreshAccount,
+    confirmAdult,
     fakeSignIn,
     signOut,
     clearError: () => setError(null),

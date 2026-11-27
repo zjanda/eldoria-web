@@ -3,7 +3,7 @@ import { api, isUnreachable } from "../../api/client";
 import type { CreationQuestion, GameRules, HeroSheet } from "../../api/types";
 import { Portrait } from "../common/Portrait";
 import { SceneArt } from "../scene/SceneArt";
-import { DEFAULT_RULES, DIFFICULTIES, RulesFields } from "../rules/RulesPanel";
+import { DEFAULT_RULES, DIFFICULTIES, RulesFields, type ContentControls } from "../rules/RulesPanel";
 import { SheetForm, blankSheet } from "./SheetForm";
 
 const MAX_PARTY_SIZE = 4;
@@ -73,10 +73,12 @@ interface HeroForgeProps {
   error: string | null;
   onBegin: (sheets: HeroSheet[], premise: string, rules: GameRules, wishes: string[]) => void;
   onCancel: () => void;
+  /** The new tale's content switches: which exist here, and the age confirmation. */
+  content?: ContentControls;
 }
 
 /** Free-form character creation: describe anyone, get a full sheet, then change whatever you like. */
-export function HeroForge({ busy, error, onBegin, onCancel }: HeroForgeProps) {
+export function HeroForge({ busy, error, onBegin, onCancel, content }: HeroForgeProps) {
   const [saved] = useState(loadForge);
   const [premise, setPremise] = useState(saved?.premise ?? "");
   const [rules, setRules] = useState<GameRules>(saved?.rules ?? DEFAULT_RULES);
@@ -195,7 +197,7 @@ export function HeroForge({ busy, error, onBegin, onCancel }: HeroForgeProps) {
                   <span className="ml-2 text-[0.72rem] text-mist">change them now or at any time during play</span>
                 </summary>
                 <div className="mt-3">
-                  <RulesFields key={generation} rules={rules} wishes={wishes} onChange={(nextRules, nextWishes) => { setRules(nextRules); setWishes(nextWishes); }} />
+                  <RulesFields key={generation} rules={rules} wishes={wishes} content={content} onChange={(nextRules, nextWishes) => { setRules(nextRules); setWishes(nextWishes); }} />
                 </div>
               </details>
             </section>

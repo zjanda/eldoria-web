@@ -125,6 +125,8 @@ export const api = {
     request<AccountInfo>("/api/auth/reset-password", { method: "POST", body: JSON.stringify({ token, new_password: newPassword }) }),
   verifyEmail: (token: string) =>
     request<{ detail: string }>("/api/auth/verify-email", { method: "POST", body: JSON.stringify({ token }) }),
+  /** Google and password mode: the player confirms being 18 or older (needed for a tale's sexual content). */
+  confirmAdult: () => request<AccountInfo>("/api/auth/confirm-adult", { method: "POST", body: JSON.stringify({ confirm: true }) }),
   resendVerification: () => request<{ detail: string }>("/api/auth/resend-verification", { method: "POST" }),
   signOut: () => request<void>("/api/auth/sign-out", { method: "POST" }),
   turn: (id: string, actionText: string, fate: Fate | null = null) =>
