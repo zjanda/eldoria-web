@@ -527,10 +527,32 @@ export interface LatestAdventure {
   updated_at: string;
 }
 
-/** Whose saves these are. `email` is set only when the server keeps each player's tales apart ("access"). */
+/**
+ * Whose saves these are. `email` is set only when the server keeps each player's tales apart: "access"
+ * (Cloudflare Access sign-in), or "google" and "password" (the game's own accounts; null there means
+ * signed out).
+ */
 export interface AccountInfo {
-  account_mode: "shared" | "access";
+  account_mode: "shared" | "access" | "google" | "password";
   email: string | null;
+  /** Google and password mode only from here on. */
+  display_name?: string | null;
+  /** The plan whose daily allowance applies now ("free" or "subscriber"). */
+  plan?: string | null;
+  /** Whether daily allowances are enforced. While false nothing about limits or plans is shown. */
+  paywall?: boolean;
+  /** False when the server has no Google client id configured. */
+  sign_in_available?: boolean;
+  /** Local test servers only: a stand-in for the Google button. */
+  fake_sign_in?: boolean;
+  /** Password mode: whether the email address has been confirmed. */
+  email_verified?: boolean;
+  /** Password mode: whether the server sends email (confirm links, forgot password). */
+  mail_enabled?: boolean;
+  /** Password mode, with mail: false when an account must confirm its email before playing. */
+  unverified_may_play?: boolean;
+  /** Password mode: the shortest password the server accepts. */
+  password_min_length?: number;
 }
 
 export interface ProviderStatus {

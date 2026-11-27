@@ -1,7 +1,12 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { useRef, useState } from "react";
-import { remoteBackend } from "../api/connection";
+import { useEffect, useRef, useState } from "react";
+import { api } from "../api/client";
+import { googleClientId, remoteBackend } from "../api/connection";
 import type { AccountInfo, ProviderStatus, SaveSummary } from "../api/types";
+import { hasOwnAccounts, signedOutOfAccount } from "../hooks/useAdventure";
+import { GoogleSignInButton } from "./GoogleSignInButton";
+import { ChangePasswordDialog, PasswordAccountPanel, ResetPasswordPanel } from "./PasswordAccount";
+import { TermsDialog } from "./TermsDialog";
 import { SceneArt } from "./scene/SceneArt";
 
 interface TitleScreenProps {
@@ -20,12 +25,32 @@ interface TitleScreenProps {
   account: AccountInfo | null;
   /** "sandbox": an open tale with heroes of the player's own making. "premade": The Whispering Darkness. */
   onNew: (kind: "sandbox" | "premade") => void;
-  /** Hosted demo: whether the private server answered. Only what works is shown. */
+  /** Hosted page: whether the server answered. Only what works is shown. */
   connection: "checking" | "online" | "offline";
+  /** Asks the server again after it was unreachable. */
+  onRetry: () => void;
+  /** Google mode: the ID token from the Google button. */
+  onSignInWithGoogle: (credential: string) => void;
+  /** Local test servers only: sign in as any address. */
+  onFakeSignIn: (email: string, name: string) => void;
+  /** Password mode: resolve true once signed in (the reason for a refusal is shown in `error`). */
+  onSignInWithPassword: (email: string, password: string) => Promise<boolean>;
+  onRegister: (email: string, password: string, displayName: string) => Promise<boolean>;
+  /** Password mode: a reset link signed the player in. */
+  onAdoptSession: (account: AccountInfo) => void;
+  /** Asks the server again who is signed in (after an email was confirmed). */
+  onRefreshAccount: () => void;
+  onSignOut: () => void;
 }
 
-/** Where visitors play when the private server is not reachable. */
-const BROWSER_DEMO_URL = "https://portfolio.jandalisoftware.com/demo/eldoria";
+/** A link from an account email: #verify=TOKEN or #reset=TOKEN on the website's address. */
+function readAccountLink(): { purpose: "verify" | "reset"; token: string } | null {
+  const match = /^#(verify|reset)=([\w-]{10,200})$/.exec(window.location.hash);
+  if (!match) return null;
+  // Take the token out of the address bar and history at once.
+  window.history.replaceState(null, "", window.location.pathname + window.location.search);
+  return { purpose: match[1] as "verify" | "reset", token: match[2] };
+}
 
 function timeAgo(iso: string) {
   const minutes = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
@@ -37,13 +62,53 @@ function timeAgo(iso: string) {
   return days === 1 ? "yesterday" : `${days} days ago`;
 }
 
-export function TitleScreen({ saves, providers, loading, error, onOpen, onRename, onDelete, onExport, onImport, account, onNew, connection }: TitleScreenProps) {
-  // The hosted build is a demo: without the private server none of the game's buttons can work, so they are hidden.
-  const playable = !remoteBackend || connection === "online";
+export function TitleScreen({
+  saves, providers, loading, error, onOpen, onRename, onDelete, onExport, onImport, account, onNew, connection,
+  onRetry, onSignInWithGoogle, onFakeSignIn, onSignInWithPassword, onRegister, onAdoptSession, onRefreshAccount, onSignOut,
+}: TitleScreenProps) {
+  // On the hosted page the game's buttons work only while the server answers and, with accounts, once signed in.
+  const offline = remoteBackend && connection === "offline";
+  const [resetToken, setResetToken] = useState<string | null>(null);
+  const [linkNotice, setLinkNotice] = useState<string | null>(null);
+  const needsSignIn = signedOutOfAccount(account) || resetToken !== null;
+  const playable = (!remoteBackend || connection === "online") && !needsSignIn;
   const latest = playable ? saves[0] ?? null : null;
   const [showSaves, setShowSaves] = useState(false);
+  const [showTerms, setShowTerms] = useState(false);
+  const [changingPassword, setChangingPassword] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
-  const signedInAs = account?.account_mode === "access" ? account.email : null;
+  const passwordMode = account?.account_mode === "password";
+  const ownAccounts = hasOwnAccounts(account);
+  const signedInAs = account?.account_mode === "access" ? account.email
+    : ownAccounts && account?.email ? account.display_name || account.email : null;
+  const offerTerms = remoteBackend || ownAccounts;
+  const awaitingConfirmation = passwordMode && Boolean(account?.email) && account?.mail_enabled && !account?.email_verified;
+
+  // Links from account emails (and from the owner's reset links) open here.
+  useEffect(() => {
+    const followLink = () => {
+      const link = readAccountLink();
+      if (!link) return;
+      if (link.purpose === "reset") {
+        setResetToken(link.token);
+        return;
+      }
+      api.verifyEmail(link.token)
+        .then((answer) => {
+          setLinkNotice(answer.detail);
+          onRefreshAccount();
+        })
+        .catch((problem: Error) => setLinkNotice(problem.message));
+    };
+    followLink();
+    // Also when a link is opened in a tab that already shows the game.
+    window.addEventListener("hashchange", followLink);
+    return () => window.removeEventListener("hashchange", followLink);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const resendConfirmation = () => {
+    api.resendVerification().then((answer) => setLinkNotice(answer.detail)).catch((problem: Error) => setLinkNotice(problem.message));
+  };
   const importChosenFile = async (input: HTMLInputElement) => {
     const file = input.files?.[0];
     input.value = ""; // choosing the same file again still imports it again
@@ -64,16 +129,6 @@ export function TitleScreen({ saves, providers, loading, error, onOpen, onRename
         >
           Cinematic Tales of Your Own Making
         </motion.p>
-        {remoteBackend && (
-          <motion.span
-            className="label mb-4 rounded-full border border-gold/50 px-3 py-1 text-gold"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.6, duration: 1 }}
-          >
-            Demo
-          </motion.span>
-        )}
         <motion.h1
           className="font-display text-6xl font-semibold tracking-[0.18em] sm:text-8xl"
           style={{
@@ -153,13 +208,41 @@ export function TitleScreen({ saves, providers, loading, error, onOpen, onRename
             onChange={(event) => void importChosenFile(event.currentTarget)}
           />
           </>}
-          {remoteBackend && connection === "offline" && (
-            <a className="btn-gold flex-col !gap-0.5" href={BROWSER_DEMO_URL}>
-              <span>Play the Demo</span>
-              <span className="font-sans text-[0.68rem] normal-case tracking-normal text-mist">A short adventure in your browser</span>
-            </a>
+          {linkNotice && <p className="rounded-md border border-gold/40 bg-gold/10 px-3 py-2 text-sm text-gold-soft">{linkNotice}</p>}
+          {resetToken && !offline && (
+            <ResetPasswordPanel
+              token={resetToken}
+              minLength={account?.password_min_length ?? 15}
+              onDone={(signedIn) => {
+                setResetToken(null);
+                setLinkNotice("Your new password is saved. You are signed in.");
+                onAdoptSession(signedIn);
+              }}
+              onCancel={() => setResetToken(null)}
+            />
           )}
-          {error && <p className="rounded-md border border-ember/40 bg-ember/10 px-3 py-2 text-sm text-ember">{error}</p>}
+          {!resetToken && needsSignIn && !offline && account && (passwordMode ? (
+            <PasswordAccountPanel account={account} busy={loading} onSignIn={onSignInWithPassword} onRegister={onRegister} />
+          ) : (
+            <SignInPanel account={account} busy={loading} onSignInWithGoogle={onSignInWithGoogle} onFakeSignIn={onFakeSignIn} />
+          ))}
+          {awaitingConfirmation && (
+            <p className="text-[0.72rem] text-parchment/75">
+              Please confirm your email address with the link we sent you.{" "}
+              <button className="text-gold underline-offset-2 hover:underline" onClick={resendConfirmation}>Send a new link</button>
+            </p>
+          )}
+          {offline && (
+            <div className="space-y-3">
+              <p className="text-sm text-parchment/80">
+                The game server is offline right now. It runs on a home server; please try again later.
+              </p>
+              <button className="btn-ghost w-full py-2.5 font-display text-xs uppercase tracking-[0.2em]" onClick={onRetry}>
+                Try again
+              </button>
+            </div>
+          )}
+          {error &&<p className="rounded-md border border-ember/40 bg-ember/10 px-3 py-2 text-sm text-ember">{error}</p>}
         </motion.div>
 
         <AnimatePresence>
@@ -180,15 +263,91 @@ export function TitleScreen({ saves, providers, loading, error, onOpen, onRename
 
       </div>
 
-      {(providers || signedInAs) && (
+      {(providers || signedInAs || offerTerms) && (
         <p className="absolute bottom-4 left-0 right-0 z-10 px-4 text-center text-[0.7rem] text-mist/60">
           {signedInAs && <span className="break-all">Signed in as {signedInAs}</span>}
+          {signedInAs && passwordMode && (
+            <>
+              {" · "}
+              <button className="underline-offset-2 hover:text-gold hover:underline" onClick={() => setChangingPassword(true)}>
+                Change password
+              </button>
+            </>
+          )}
+          {signedInAs && ownAccounts && (
+            <>
+              {" · "}
+              <button className="underline-offset-2 hover:text-gold hover:underline" onClick={() => { setLinkNotice(null); onSignOut(); }}>
+                Sign out
+              </button>
+            </>
+          )}
           {signedInAs && providers && " · "}
           {providers && <>
             Dungeon Master: {providers.narrative_provider === "mock" ? "Offline storyteller" : providers.narrative_provider} · Artwork:{" "}
             {providers.images_enabled ? providers.image_provider : "illustrated fallbacks"}
           </>}
+          {offerTerms && (
+            <>
+              {(signedInAs || providers) && " · "}
+              <button className="underline-offset-2 hover:text-gold hover:underline" onClick={() => setShowTerms(true)}>
+                Terms and privacy
+              </button>
+            </>
+          )}
         </p>
+      )}
+      <AnimatePresence>{showTerms && <TermsDialog mode={account?.account_mode ?? null} onClose={() => setShowTerms(false)} />}</AnimatePresence>
+      <AnimatePresence>
+        {changingPassword && account && <ChangePasswordDialog account={account} onClose={() => setChangingPassword(false)} />}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+interface SignInPanelProps {
+  account: AccountInfo;
+  busy: boolean;
+  onSignInWithGoogle: (credential: string) => void;
+  onFakeSignIn: (email: string, name: string) => void;
+}
+
+/** Google mode, signed out: the Google button, one sentence on what signing in does, and on a local test server a stand-in. */
+function SignInPanel({ account, busy, onSignInWithGoogle, onFakeSignIn }: SignInPanelProps) {
+  const [testEmail, setTestEmail] = useState("");
+  const googleReady = googleClientId !== "" && account.sign_in_available !== false;
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-parchment/80">
+        Signing in with Google gives you your own account, so your tales are saved for you and only you can open them.
+      </p>
+      {googleReady && <GoogleSignInButton clientId={googleClientId} disabled={busy} onCredential={onSignInWithGoogle} />}
+      {!googleReady && !account.fake_sign_in && (
+        <p className="text-xs text-mist">Sign-in is not available right now. Please try again later.</p>
+      )}
+      {account.fake_sign_in && (
+        <form
+          className="panel space-y-2 p-3 text-left"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (testEmail.trim()) onFakeSignIn(testEmail.trim(), testEmail.trim().split("@")[0]);
+          }}
+        >
+          <label className="block text-[0.7rem] text-mist" htmlFor="local-test-email">
+            Local test server: sign in without Google as
+          </label>
+          <input
+            id="local-test-email"
+            type="email"
+            value={testEmail}
+            onChange={(event) => setTestEmail(event.target.value)}
+            placeholder="tester@example.com"
+            className="w-full rounded border border-gold/40 bg-night-900 px-2 py-1 text-sm text-parchment focus:outline-none"
+          />
+          <button type="submit" className="btn-ghost w-full !py-1.5 text-xs" disabled={busy || !testEmail.trim()}>
+            Sign in (local test)
+          </button>
+        </form>
       )}
     </div>
   );

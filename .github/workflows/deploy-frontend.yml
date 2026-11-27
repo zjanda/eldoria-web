@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   deploy:
-    # Enable only after verifying the backend's private Access policy and custom domain.
+    # Enable only after verifying the backend's protection (Access, or google account mode) and the custom domain.
     if: vars.ELDORIA_PRIVATE_BACKEND_READY == 'true' && vars.ELDORIA_FRONTEND_DOMAIN != ''
     runs-on: ubuntu-latest
     environment:
@@ -30,6 +30,8 @@ jobs:
         working-directory: frontend
     env:
       VITE_BACKEND_ORIGIN: ${{ vars.ELDORIA_BACKEND_ORIGIN || 'https://eldoria-api.jandalisoftware.com' }}
+      # Public OAuth client id for Sign in with Google (a repository variable, not a secret).
+      VITE_GOOGLE_CLIENT_ID: ${{ vars.ELDORIA_GOOGLE_CLIENT_ID }}
       ELDORIA_FRONTEND_DOMAIN: ${{ vars.ELDORIA_FRONTEND_DOMAIN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

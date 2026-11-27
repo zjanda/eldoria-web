@@ -14,6 +14,8 @@ export function normalizeBackendOrigin(value: string): string {
 
 export const backendOrigin = normalizeBackendOrigin(import.meta.env.VITE_BACKEND_ORIGIN ?? "");
 export const remoteBackend = backendOrigin !== "";
+/** The OAuth client id for Sign in with Google (public, not a secret). Empty: no Google button. */
+export const googleClientId = (import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "").trim();
 
 export function backendUrl(path: string): string {
   if (!path.startsWith("/") || path.startsWith("//")) {

@@ -4,15 +4,23 @@ import type { AccountInfo, Adventure, CreationOptions, Fate, GameRules, HeroBuil
 const CAMPAIGN_ID = "whispering_darkness";
 
 export class ApiError extends Error {
-  /** True when the server could not be reached at all, as opposed to a real problem it reported. */
-  constructor(public status: number, message: string, public unreachable = false) {
+  /**
+   * `unreachable`: the server could not be reached at all, as opposed to a real problem it reported.
+   * `code`: a machine-readable reason some refusals carry, such as "daily_limit_reached" (402).
+   */
+  constructor(public status: number, message: string, public unreachable = false, public code: string | null = null) {
     super(message);
   }
 }
 
-/** The hosted demo stays quiet about a server it cannot reach: those failures only mark the game offline. */
+/** The hosted page stays quiet about a server it cannot reach: those failures only mark the game offline. */
 export function isUnreachable(error: unknown): boolean {
   return remoteBackend && error instanceof ApiError && error.unreachable;
+}
+
+/** True when the server said no signed-in player came with the request (401). */
+export function isSignedOut(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 401;
 }
 
 /** The largest tale file the server accepts (see MAX_IMPORT_BYTES in backend/app/main.py). */
@@ -28,23 +36,26 @@ async function send(path: string, init?: RequestInit): Promise<Response> {
     });
   } catch {
     throw new ApiError(0, remoteBackend
-      ? "Cannot reach your private Eldoria server. Check that your PC is on and sign in to the server, then retry."
+      ? "Cannot reach the Eldoria server right now. It runs on a home server that is sometimes offline; please try again later."
       : "Cannot reach the Eldoria server. Is the backend running on port 8000?", true);
   }
   if (!response.ok) {
     let detail = response.statusText;
+    let code: string | null = null;
     try {
       const body = await response.json();
       detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+      code = typeof body.code === "string" ? body.code : null;
     } catch {
       /* keep status text */
     }
-    if (response.status === 401) {
-      // No signed-in player came with the request. The hosted page treats this like a lapsed sign-in,
-      // the same as a server it cannot reach; local play shows the server's explanation.
-      throw new ApiError(401, remoteBackend ? "Your sign-in to the private server has ended. Sign in again, then retry." : detail, remoteBackend);
+    if (response.status === 401 && !path.startsWith("/api/auth/")) {
+      // No signed-in player came with the request. The hosted page treats this like a lapsed sign-in
+      // (useAdventure returns to the sign-in screen in google mode); local play shows the server's explanation.
+      throw new ApiError(401, remoteBackend ? "Your sign-in has ended. Sign in again to carry on." : detail, remoteBackend);
     }
-    throw new ApiError(response.status, detail);
+    // 402 (google mode, paywall on): the server's message says which daily limit was reached and when it resets.
+    throw new ApiError(response.status, detail, false, code);
   }
   return response;
 }
@@ -53,7 +64,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await send(path, init);
   if (response.status === 204) return undefined as T;
   if (remoteBackend && !response.headers.get("Content-Type")?.includes("application/json")) {
-    throw new ApiError(502, "Your private server did not return game data. Sign in to the server and retry.", true);
+    throw new ApiError(502, "The Eldoria server did not return game data. Please try again later.", true);
   }
   return response.json() as Promise<T>;
 }
@@ -95,6 +106,27 @@ export const api = {
   /** Adds an exported tale as a new save of this player's. Never replaces an existing one. */
   importSave: (fileText: string) => request<Adventure>("/api/adventures/import", { method: "POST", body: fileText }),
   me: () => request<AccountInfo>("/api/me"),
+  /** Google mode: hand the server the ID token from the Google button; it starts a session (a cookie). */
+  signInWithGoogle: (credential: string) =>
+    request<AccountInfo>("/api/auth/google", { method: "POST", body: JSON.stringify({ credential }) }),
+  /** Local test servers only (scripts/sandbox_backend.py --account-mode google). */
+  fakeSignIn: (email: string, name: string) =>
+    request<AccountInfo>("/api/auth/fake", { method: "POST", body: JSON.stringify({ email, name }) }),
+  /** Password mode. Passwords go only to this game's own server, over HTTPS when hosted. */
+  register: (email: string, password: string, displayName: string) =>
+    request<AccountInfo>("/api/auth/register", { method: "POST", body: JSON.stringify({ email, password, display_name: displayName }) }),
+  signIn: (email: string, password: string) =>
+    request<AccountInfo>("/api/auth/sign-in", { method: "POST", body: JSON.stringify({ email, password }) }),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<void>("/api/auth/change-password", { method: "POST", body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }) }),
+  forgotPassword: (email: string) =>
+    request<{ detail: string }>("/api/auth/forgot-password", { method: "POST", body: JSON.stringify({ email }) }),
+  resetPassword: (token: string, newPassword: string) =>
+    request<AccountInfo>("/api/auth/reset-password", { method: "POST", body: JSON.stringify({ token, new_password: newPassword }) }),
+  verifyEmail: (token: string) =>
+    request<{ detail: string }>("/api/auth/verify-email", { method: "POST", body: JSON.stringify({ token }) }),
+  resendVerification: () => request<{ detail: string }>("/api/auth/resend-verification", { method: "POST" }),
+  signOut: () => request<void>("/api/auth/sign-out", { method: "POST" }),
   turn: (id: string, actionText: string, fate: Fate | null = null) =>
     request<TurnResponse>(`/api/adventures/${id}/turns`, {
       method: "POST",

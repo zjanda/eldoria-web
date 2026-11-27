@@ -3,15 +3,20 @@ import { readFile } from "node:fs/promises";
 import { transformWithEsbuild } from "vite";
 
 const source = await readFile(new URL("../src/api/connection.ts", import.meta.url), "utf8");
-async function transport(origin) {
+async function transport(origin, googleClientId = "") {
   const result = await transformWithEsbuild(source, "connection.ts", {
     format: "esm",
-    define: { "import.meta.env.VITE_BACKEND_ORIGIN": JSON.stringify(origin) },
+    define: {
+      "import.meta.env.VITE_BACKEND_ORIGIN": JSON.stringify(origin),
+      "import.meta.env.VITE_GOOGLE_CLIENT_ID": JSON.stringify(googleClientId),
+    },
   });
   return import(`data:text/javascript;base64,${Buffer.from(result.code).toString("base64")}`);
 }
 const local = await transport("");
-const remote = await transport("https://eldoria-api.jandalisoftware.com/");
+const remote = await transport("https://eldoria-api.jandalisoftware.com/", " 1234-test.apps.googleusercontent.com ");
+assert.equal(local.googleClientId, "");
+assert.equal(remote.googleClientId, "1234-test.apps.googleusercontent.com");
 assert.equal(local.backendUrl("/api/adventures"), "/api/adventures");
 assert.equal(local.mediaUrl("/media/scene.png"), "/media/scene.png");
 assert.equal(remote.backendUrl("/api/tts"), "https://eldoria-api.jandalisoftware.com/api/tts");
@@ -34,6 +39,9 @@ try {
   assert.equal(calls[1].url, "https://eldoria-api.jandalisoftware.com/api/adventures");
   assert.equal(calls[1].options.method, "POST");
   assert.equal(calls[1].options.body, "{}");
+  // Sign-in, sign-out and every game request carry the session cookie to the API host (same-site).
+  await remote.backendFetch("/api/auth/google", { method: "POST", body: "{}" });
+  assert.equal(calls[2].options.credentials, "include");
 } finally {
   globalThis.fetch = originalFetch;
 }

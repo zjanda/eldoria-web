@@ -3,8 +3,9 @@ import { useState } from "react";
 import { CharacterCreator } from "./components/creation/CharacterCreator";
 import { HeroForge, clearForgeDraft } from "./components/creation/HeroForge";
 import { GameScreen } from "./components/GameScreen";
+import { forgetGoogleAutoSelect } from "./components/GoogleSignInButton";
 import { TitleScreen } from "./components/TitleScreen";
-import { useAdventure } from "./hooks/useAdventure";
+import { hasOwnAccounts, signedOutOfAccount, useAdventure } from "./hooks/useAdventure";
 import { useSettings } from "./hooks/useSettings";
 import { useVoices } from "./hooks/useVoices";
 import { narrator } from "./lib/narrator";
@@ -14,7 +15,8 @@ const CREATING_KEY = "eldoria.creating";
 export default function App() {
   const game = useAdventure();
   const { settings, update, reset } = useSettings();
-  const voices = useVoices(settings, update);
+  // With the server's own accounts its voices are fetched once someone is signed in (null: signed out).
+  const voices = useVoices(settings, update, hasOwnAccounts(game.account) ? game.account?.email ?? null : "");
   // A new tale starts with character creation: the open forge, or the premade story's own heroes.
   // Which creation screen is open survives a reload of this tab, so the page comes back where it was.
   const [creating, setCreatingState] = useState<"sandbox" | "premade" | null>(() => {
@@ -40,11 +42,14 @@ export default function App() {
     narrator.unlock();
     action();
   };
+  // Google mode, signed out (or the session lapsed): only the title screen with sign-in. Which creation
+  // screen was open is kept, and its typing is saved in this browser, so signing in again returns to it.
+  const needsSignIn = signedOutOfAccount(game.account);
 
   return (
     <MotionConfig reducedMotion={settings.reduceMotion ? "always" : "user"}>
       <AnimatePresence mode="wait">
-        {game.adventure ? (
+        {!needsSignIn && game.adventure ? (
           <motion.div key="game" className="h-full" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.8 }}>
             <GameScreen
               adventure={game.adventure}
@@ -67,7 +72,7 @@ export default function App() {
               onDismissError={game.clearError}
             />
           </motion.div>
-        ) : creating === "sandbox" ? (
+        ) : !needsSignIn && creating === "sandbox" ? (
           <motion.div key="forge" className="h-full" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.5 }}>
             <HeroForge
               busy={game.loading}
@@ -85,7 +90,7 @@ export default function App() {
               }}
             />
           </motion.div>
-        ) : creating === "premade" ? (
+        ) : !needsSignIn && creating === "premade" ? (
           <motion.div key="creation" className="h-full" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.5 }}>
             <CharacterCreator
               busy={game.loading}
@@ -118,6 +123,18 @@ export default function App() {
                 setCreating(kind);
               }}
               connection={game.connection}
+              onRetry={game.retryConnection}
+              onSignInWithGoogle={(credential) => void game.signInWithGoogle(credential)}
+              onFakeSignIn={(email, name) => void game.fakeSignIn(email, name)}
+              onSignInWithPassword={game.signInWithPassword}
+              onRegister={game.register}
+              onAdoptSession={game.adoptSession}
+              onRefreshAccount={game.refreshAccount}
+              onSignOut={() => {
+                forgetGoogleAutoSelect();
+                setCreating(null);
+                void game.signOut();
+              }}
             />
           </motion.div>
         )}

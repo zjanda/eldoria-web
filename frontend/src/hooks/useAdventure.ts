@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { MAX_TALE_FILE_BYTES, api, isUnreachable } from "../api/client";
+import { MAX_TALE_FILE_BYTES, api, isSignedOut, isUnreachable } from "../api/client";
 import type { AccountInfo, Adventure, DiceRoll, Fate, GameRules, HeroBuild, HeroSheet, ProviderStatus, SaveSummary, TurnResponse } from "../api/types";
 
 export interface TurnFeedback {
@@ -22,6 +22,24 @@ function rememberOpenTale(adventureId: string | null) {
   }
 }
 
+function rememberedOpenTale(): string | null {
+  try {
+    return window.sessionStorage.getItem(OPEN_TALE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** Google and password mode: the server keeps its own accounts and a visitor must sign in to play. */
+export function hasOwnAccounts(account: AccountInfo | null): boolean {
+  return account?.account_mode === "google" || account?.account_mode === "password";
+}
+
+/** Google and password mode: whether this account view is signed out. */
+export function signedOutOfAccount(account: AccountInfo | null): boolean {
+  return hasOwnAccounts(account) && !account?.email;
+}
+
 export function useAdventure() {
   const [adventure, setAdventure] = useState<Adventure | null>(null);
   const [saves, setSaves] = useState<SaveSummary[]>([]);
@@ -30,30 +48,73 @@ export function useAdventure() {
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setErrorMessage] = useState<string | null>(null);
-  /** Hosted demo only: "offline" when the private server cannot be reached, which is not shown as an error. */
+  /** Hosted page only: "offline" when the server cannot be reached, which is not shown as an error. */
   const [connection, setConnection] = useState<"checking" | "online" | "offline">("checking");
   const [feedback, setFeedback] = useState<TurnFeedback | null>(null);
   const inFlight = useRef(false);
+  // The latest account, for failure handling that must not wait for a re-render.
+  const accountRef = useRef<AccountInfo | null>(null);
+  const applyAccount = useCallback((next: AccountInfo | null) => {
+    accountRef.current = next;
+    setAccount(next);
+  }, []);
 
   // Every failure in this hook is reported through here, so an unreachable server never shows an error.
   const fail = useCallback((e: unknown) => {
+    const current = accountRef.current;
+    if (isSignedOut(e) && hasOwnAccounts(current) && current) {
+      // The session lapsed (expired, signed out elsewhere, or switched off). Back to the sign-in screen;
+      // the open tale is remembered and typed actions are kept in this browser, so nothing is lost.
+      const wasSignedIn = Boolean(current.email);
+      applyAccount({ ...current, email: null, display_name: null, plan: null });
+      setAdventure(null);
+      setFeedback(null);
+      setSaves([]);
+      setErrorMessage(wasSignedIn ? "Your sign-in has ended. Sign in again to carry on; what you were typing is kept." : null);
+      return;
+    }
     if (isUnreachable(e)) {
       setConnection("offline");
       return;
     }
     setErrorMessage((e as Error).message);
-  }, []);
+  }, [applyAccount]);
   const setError = useCallback((message: string | null) => setErrorMessage(message), []);
 
   const refreshSaves = useCallback(() => {
+    if (signedOutOfAccount(accountRef.current)) return;
     api.saves().then(setSaves).catch(fail);
   }, [fail]);
 
+  /** Reopens the tale this tab was playing (after a reload or a new sign-in). If it is gone, stays quietly on the title. */
+  const reopenRememberedTale = useCallback(() => {
+    const wanted = rememberedOpenTale();
+    if (!wanted) return () => undefined;
+    let cancelled = false;
+    api
+      .load(wanted)
+      .then((loaded) => !cancelled && setAdventure((current) => current ?? loaded))
+      .catch((e: unknown) => {
+        // Signed out: keep it, to reopen once the player signs in again.
+        if (!isSignedOut(e)) rememberOpenTale(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const retryConnection = useCallback(() => {
     setError(null);
-    refreshSaves();
-    // Only for showing who is signed in; the game works the same without it.
-    api.me().then(setAccount).catch(() => setAccount(null));
+    // Who is signed in comes first: with accounts a signed-out visitor has no saves to list.
+    api.me()
+      .then((me) => {
+        applyAccount(me);
+        refreshSaves();
+      })
+      .catch(() => {
+        applyAccount(null);
+        refreshSaves();
+      });
     api.health()
       .then((status) => {
         setProviders(status);
@@ -64,7 +125,7 @@ export function useAdventure() {
         setConnection("offline");
         if (!isUnreachable(e)) fail(e);
       });
-  }, [refreshSaves, setError, fail]);
+  }, [applyAccount, refreshSaves, setError, fail]);
 
   useEffect(retryConnection, [retryConnection]);
 
@@ -74,23 +135,90 @@ export function useAdventure() {
   }, [openTaleId]);
 
   // After a reload: reopen the tale this tab was playing. If it is gone, stay on the title screen quietly.
-  useEffect(() => {
-    let wanted: string | null = null;
+  useEffect(reopenRememberedTale, [reopenRememberedTale]);
+
+  /** Google and password mode: what to do once the server has started a session. */
+  const signedIn = useCallback((me: AccountInfo) => {
+    applyAccount(me);
+    setError(null);
+    refreshSaves();
+    reopenRememberedTale();
+  }, [applyAccount, refreshSaves, reopenRememberedTale, setError]);
+
+  /** Google mode: the ID token the Google button produced. Resolves true once signed in. */
+  const signInWithGoogle = useCallback(async (credential: string) => {
+    setLoading(true);
+    setError(null);
     try {
-      wanted = window.sessionStorage.getItem(OPEN_TALE_KEY);
-    } catch {
-      return;
+      signedIn(await api.signInWithGoogle(credential));
+      return true;
+    } catch (e) {
+      if (isUnreachable(e) && !isSignedOut(e)) setConnection("offline");
+      setError((e as Error).message);
+      return false;
+    } finally {
+      setLoading(false);
     }
-    if (!wanted) return;
-    let cancelled = false;
-    api
-      .load(wanted)
-      .then((loaded) => !cancelled && setAdventure((current) => current ?? loaded))
-      .catch(() => rememberOpenTale(null));
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  }, [setError, signedIn]);
+
+  /** Password mode: sign in, or create an account (resolves true once signed in; the reason is left in `error`). */
+  const signInWithPassword = useCallback(async (email: string, password: string) => runSignIn(() => api.signIn(email, password)), []); // eslint-disable-line react-hooks/exhaustive-deps
+  const register = useCallback(async (email: string, password: string, displayName: string) =>
+    runSignIn(() => api.register(email, password, displayName)), []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Asks the server again who is signed in (after confirming an email or changing a password). */
+  const refreshAccount = useCallback(() => {
+    api.me().then(applyAccount).catch(() => undefined);
+  }, [applyAccount]);
+
+  /** Local test servers only: sign in as any address. */
+  const fakeSignIn = useCallback(async (email: string, name: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      signedIn(await api.fakeSignIn(email, name));
+      return true;
+    } catch (e) {
+      setError((e as Error).message);
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  }, [setError, signedIn]);
+
+  async function runSignIn(request: () => Promise<AccountInfo>): Promise<boolean> {
+    setLoading(true);
+    setError(null);
+    try {
+      signedIn(await request());
+      return true;
+    } catch (e) {
+      if (isUnreachable(e) && !isSignedOut(e)) setConnection("offline");
+      setError((e as Error).message);
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  /** Google and password mode: ends this browser's session on the server, and forgets the open tale. */
+  const signOut = useCallback(async () => {
+    try {
+      await api.signOut();
+    } catch (e) {
+      if (!isSignedOut(e)) {
+        fail(e);
+        return;
+      }
+    }
+    rememberOpenTale(null);
+    setAdventure(null);
+    setFeedback(null);
+    setSaves([]);
+    setError(null);
+    const current = accountRef.current;
+    applyAccount(current ? { ...current, email: null, display_name: null, plan: null } : null);
+  }, [applyAccount, fail, setError]);
 
   /** Resolves true once the story has begun; on a refusal the reason is left in `error`. */
   const startNew = useCallback(async (heroes: HeroBuild[] | null = null) => {
@@ -387,6 +515,13 @@ export function useAdventure() {
     paintArt,
     chooseArt,
     exitToTitle,
+    signInWithGoogle,
+    signInWithPassword,
+    register,
+    adoptSession: signedIn,
+    refreshAccount,
+    fakeSignIn,
+    signOut,
     clearError: () => setError(null),
   };
 }
